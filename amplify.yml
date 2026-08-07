@@ -1,0 +1,41 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - nvm install 22
+        - nvm use 22
+        - npm install
+    build:
+      commands:
+        # VITE_API_URL must come from Amplify Console → Hosting → Environment variables.
+        # Never hardcode the API origin here or in app source.
+        - |
+          if [ -z "$VITE_API_URL" ]; then
+            echo "ERROR: VITE_API_URL is not set."
+            echo "Add it in Amplify Console → App settings → Environment variables"
+            echo "Example: VITE_API_URL=https://api.namecardscan.com"
+            exit 1
+          fi
+          echo "Building CMS with VITE_API_URL from Amplify environment"
+          npm run build
+  artifacts:
+    baseDirectory: dist
+    files:
+      - "**/*"
+  cache:
+    paths:
+      - node_modules/**/*
+  customHeaders:
+    - pattern: "assets/**/*"
+      headers:
+        - key: "Cache-Control"
+          value: "public, max-age=31536000, immutable"
+    - pattern: "*.html"
+      headers:
+        - key: "Cache-Control"
+          value: "no-cache, no-store, must-revalidate"
+customRules:
+  - source: "/<*>"
+    target: /index.html
+    status: "404-200"

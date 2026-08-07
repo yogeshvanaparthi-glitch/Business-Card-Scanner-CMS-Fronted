@@ -9,15 +9,21 @@ import {
   EMAIL_INPUT_KEYS,
   fetchAdminEnvList,
   fetchEmailShell,
+  previewValueForToken,
+  REVIEW_FIELD_OPTIONS,
   saveAdminEnv,
   SECRET_EMAIL,
   SECRET_WHATSAPP,
+  testAdminEmail,
+  testAdminWhatsApp,
   WHATSAPP_FIELD_LABELS,
+  WHATSAPP_HEADER_FORMATS,
   WHATSAPP_INPUT_KEYS,
   type AdminEnvRow,
   type EmailEnv,
   type TemplateEnv,
   type WhatsAppEnv,
+  type WhatsAppHeaderFormat,
 } from "@/lib/cmsApi";
 
 export function CmsDashboard() {
@@ -195,6 +201,7 @@ export function CmsDashboard() {
                   text: `Saved environment for ${displayName(next)}.`,
                 });
               }}
+              onOk={(text) => setMessage({ type: "ok", text })}
               onError={(text) => setMessage({ type: "err", text })}
             />
           ) : (
@@ -222,16 +229,21 @@ function StatusDot({ ok, title }: { ok: boolean; title: string }) {
 function AdminEnvEditor({
   admin,
   onSaved,
+  onOk,
   onError,
 }: {
   admin: AdminEnvRow;
   onSaved: (row: AdminEnvRow) => void;
+  onOk: (text: string) => void;
   onError: (text: string) => void;
 }) {
   const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>(admin.whatsapp);
   const [emailEnv, setEmailEnv] = useState<EmailEnv>(admin.emailEnv);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
+  const [testEmailAddr, setTestEmailAddr] = useState("");
   const [section, setSection] = useState<"whatsapp" | "email" | "templates">("templates");
 
   useEffect(() => {
@@ -239,6 +251,8 @@ function AdminEnvEditor({
     setEmailEnv(admin.emailEnv);
     setTemplates(admin.templates);
     setSection("templates");
+    setTestPhone(admin.phone || "");
+    setTestEmailAddr("");
   }, [admin]);
 
   const save = async () => {
@@ -254,6 +268,50 @@ function AdminEnvEditor({
       onError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runWhatsAppTest = async () => {
+    if (!testPhone.trim()) {
+      onError("Enter a phone number to test WhatsApp.");
+      return;
+    }
+    setTesting(true);
+    try {
+      const res = await testAdminWhatsApp(admin.admin_id, {
+        contact_phone: testPhone.trim(),
+        whatsapp,
+        templates,
+      });
+      onOk(
+        `WhatsApp test sent to ${res.to || testPhone}${res.template ? ` · ${res.template}` : ""}${res.message_id ? ` · id ${res.message_id}` : ""}`,
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "WhatsApp test failed");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const runEmailTest = async () => {
+    if (!testEmailAddr.trim()) {
+      onError("Enter an email address to test SMTP.");
+      return;
+    }
+    setTesting(true);
+    try {
+      const res = await testAdminEmail(admin.admin_id, {
+        contact_email: testEmailAddr.trim(),
+        email: emailEnv,
+        templates,
+      });
+      onOk(
+        `Email test sent to ${res.to || testEmailAddr}${res.subject ? ` · ${res.subject}` : ""}`,
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Email test failed");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -315,10 +373,16 @@ function AdminEnvEditor({
         ) : section === "whatsapp" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
             <FormSection
-              title="WhatsApp environment"
+              title="WhatsApp Cloud API (Meta)"
               enabled={whatsapp.enabled}
               onEnabledChange={(enabled) => setWhatsapp((w) => ({ ...w, enabled }))}
             >
+              <p className="mb-4 text-sm text-[var(--muted)]">
+                Same values as Meta Developer → WhatsApp → API setup / Message templates. Use the
+                exact approved template name and language code from Meta (for your account that is
+                usually <strong>card_final_ula</strong> and <strong>en</strong> — not en_US). Wrong
+                name/language returns Meta error #132001.
+              </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
                   <Field
@@ -328,7 +392,7 @@ function AdminEnvEditor({
                     hint={
                       key === "access_token" && whatsapp.access_token_set
                         ? "Saved — leave blank to keep"
-                        : key === "permanent_token" && whatsapp.permanent_token_set
+                        : key === "app_secret" && whatsapp.app_secret_set
                           ? "Saved — leave blank to keep"
                           : undefined
                     }
@@ -337,6 +401,16 @@ function AdminEnvEditor({
                   />
                 ))}
               </div>
+              <TestSendBar
+                label="Test phone"
+                placeholder="+91…"
+                value={testPhone}
+                onChange={setTestPhone}
+                testing={testing}
+                disabled={saving}
+                onTest={() => void runWhatsAppTest()}
+                buttonLabel="Test WhatsApp"
+              />
             </FormSection>
           </div>
         ) : (
@@ -355,15 +429,23 @@ function AdminEnvEditor({
                     hint={
                       key === "smtp_password" && emailEnv.smtp_password_set
                         ? "Saved — leave blank to keep"
-                        : key === "api_key" && emailEnv.api_key_set
-                          ? "Saved — leave blank to keep"
-                          : undefined
+                        : undefined
                     }
                     value={String(emailEnv[key] ?? "")}
                     onChange={(v) => setEmailEnv((em) => ({ ...em, [key]: v }))}
                   />
                 ))}
               </div>
+              <TestSendBar
+                label="Test email"
+                placeholder="you@example.com"
+                value={testEmailAddr}
+                onChange={setTestEmailAddr}
+                testing={testing}
+                disabled={saving}
+                onTest={() => void runEmailTest()}
+                buttonLabel="Test Email"
+              />
             </FormSection>
           </div>
         )}
@@ -388,7 +470,14 @@ function TemplatesWorkspace({
       .catch(() => setShell(""));
   }, []);
 
-  const waPreview = applyTemplateVars(templates.whatsapp_body, templates);
+  const waPreview = [
+    templates.whatsapp_header,
+    applyTemplateVars(templates.whatsapp_body, templates),
+    templates.whatsapp_footer,
+  ]
+    .map((part) => applyTemplateVars(part || "", templates).trim())
+    .filter(Boolean)
+    .join("\n\n");
   const emailHtml = shell
     ? buildEmailPreviewHtml(shell, templates.email_body, templates)
     : applyTemplateVars(templates.email_body, templates);
@@ -398,8 +487,8 @@ function TemplatesWorkspace({
       <div className="space-y-5 border-b border-[var(--line)] px-4 py-6 sm:px-6 lg:px-8 xl:border-b-0 xl:border-r">
         <p className="text-sm text-[var(--muted)]">
           Fixed email chrome comes from <code className="text-[var(--ink)]">thank-you.html</code>.
-          Edit only the body content below. Tokens: {"{{1}}"} name, {"{{2}}"} phone, {"{{3}}"} email,{" "}
-          {"{{4}}"} website, {"{{5}}"} sign-off.
+          Map each {"{{N}}"} token to a Review-page field — on send, the scanned value fills that
+          token in email and WhatsApp.
         </p>
 
         <label className="block text-sm">
@@ -421,50 +510,154 @@ function TemplatesWorkspace({
           />
         </label>
 
-        <div className="border-t border-[var(--line)] pt-5">
+        <div className="space-y-4 border-t border-[var(--line)] pt-5">
+          <div>
+            <p className="text-sm font-medium">WhatsApp message template</p>
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              Same structure as Meta Developer: Header (None / Text / Photo / Video / Brochure),
+              Body, Footer, optional URL button. Template name &amp; language are under WhatsApp
+              env. Header media URL must be publicly reachable (Meta downloads it).
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-[var(--line)] bg-white p-4 shadow-sm">
+            <p className="mb-3 text-sm font-semibold">Header (optional)</p>
+            <label className="block text-sm">
+              <span className="mb-1.5 block font-medium">Media sample / header type</span>
+              <select
+                className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                value={templates.whatsapp_header_format}
+                onChange={(e) =>
+                  onChange({
+                    ...templates,
+                    whatsapp_header_format: e.target.value as WhatsAppHeaderFormat,
+                  })
+                }
+              >
+                {WHATSAPP_HEADER_FORMATS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {templates.whatsapp_header_format === "TEXT" ? (
+              <label className="mt-3 block text-sm">
+                <span className="mb-1.5 block font-medium">Header text</span>
+                <input
+                  className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                  value={templates.whatsapp_header}
+                  onChange={(e) => onChange({ ...templates, whatsapp_header: e.target.value })}
+                  placeholder="CardScan Message"
+                />
+              </label>
+            ) : null}
+
+            {templates.whatsapp_header_format === "IMAGE" ||
+            templates.whatsapp_header_format === "VIDEO" ||
+            templates.whatsapp_header_format === "DOCUMENT" ? (
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="block text-sm sm:col-span-2">
+                  <span className="mb-1.5 block font-medium">
+                    {templates.whatsapp_header_format === "IMAGE"
+                      ? "Photo / image URL"
+                      : templates.whatsapp_header_format === "VIDEO"
+                        ? "Video URL"
+                        : "Brochure / PDF document URL"}
+                  </span>
+                  <input
+                    className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                    value={templates.whatsapp_header_media_url}
+                    onChange={(e) =>
+                      onChange({ ...templates, whatsapp_header_media_url: e.target.value })
+                    }
+                    placeholder={
+                      templates.whatsapp_header_format === "DOCUMENT"
+                        ? "https://…/brochure.pdf"
+                        : templates.whatsapp_header_format === "VIDEO"
+                          ? "https://…/intro.mp4"
+                          : "https://…/photo.jpg"
+                    }
+                  />
+                </label>
+                {templates.whatsapp_header_format === "DOCUMENT" ? (
+                  <label className="block text-sm sm:col-span-2">
+                    <span className="mb-1.5 block font-medium">Document filename</span>
+                    <input
+                      className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                      value={templates.whatsapp_header_media_filename}
+                      onChange={(e) =>
+                        onChange({
+                          ...templates,
+                          whatsapp_header_media_filename: e.target.value,
+                        })
+                      }
+                      placeholder="brochure.pdf"
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
           <label className="block text-sm">
-            <span className="mb-1.5 block font-medium">WhatsApp message content</span>
+            <span className="mb-1.5 block font-medium">Body</span>
             <textarea
-              rows={5}
+              rows={8}
               className="w-full resize-y rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm leading-relaxed shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
               value={templates.whatsapp_body}
               onChange={(e) => onChange({ ...templates, whatsapp_body: e.target.value })}
             />
           </label>
+
+          <label className="block text-sm">
+            <span className="mb-1.5 block font-medium">Footer (optional)</span>
+            <input
+              className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              value={templates.whatsapp_footer}
+              onChange={(e) => onChange({ ...templates, whatsapp_footer: e.target.value })}
+              placeholder="Thank you"
+            />
+          </label>
+
+          <div className="rounded-lg border border-[var(--line)] bg-white p-4 shadow-sm">
+            <p className="mb-3 text-sm font-semibold">Buttons (optional)</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1.5 block font-medium">Button text</span>
+                <input
+                  className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                  value={templates.whatsapp_button_text}
+                  onChange={(e) =>
+                    onChange({ ...templates, whatsapp_button_text: e.target.value })
+                  }
+                  placeholder="Brochure"
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1.5 block font-medium">Button URL</span>
+                <input
+                  className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                  value={templates.whatsapp_button_url}
+                  onChange={(e) =>
+                    onChange({ ...templates, whatsapp_button_url: e.target.value })
+                  }
+                  placeholder="https://…"
+                />
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              URL buttons must already exist on the approved Meta template; this stores the
+              reference used in preview.
+            </p>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 border-t border-[var(--line)] pt-5 sm:grid-cols-2 lg:grid-cols-3">
-          <Field
-            label="{{1}} Name"
-            value={templates.preview_name}
-            onChange={(v) => onChange({ ...templates, preview_name: v })}
-          />
-          <Field
-            label="{{2}} Phone"
-            value={templates.preview_phone}
-            onChange={(v) => onChange({ ...templates, preview_phone: v })}
-          />
-          <Field
-            label="{{3}} Email"
-            value={templates.preview_email}
-            onChange={(v) => onChange({ ...templates, preview_email: v })}
-          />
-          <Field
-            label="{{4}} Website"
-            value={templates.preview_website}
-            onChange={(v) => onChange({ ...templates, preview_website: v })}
-          />
-          <Field
-            label="{{5}} Sign-off"
-            value={templates.preview_signoff}
-            onChange={(v) => onChange({ ...templates, preview_signoff: v })}
-          />
-          <Field
-            label="Event / company sample"
-            value={templates.preview_company}
-            onChange={(v) => onChange({ ...templates, preview_company: v })}
-          />
-        </div>
+        <TokenMapEditor
+          tokenMap={templates.token_map}
+          onChange={(token_map) => onChange({ ...templates, token_map })}
+        />
       </div>
 
       <aside className="bg-slate-100/80 px-4 py-6 sm:px-6 lg:px-8 xl:sticky xl:top-0 xl:self-start">
@@ -504,14 +697,35 @@ function TemplatesWorkspace({
               <div className="bg-[#008069] px-4 py-3 text-white">
                 <p className="text-[11px] opacity-80">WhatsApp preview</p>
                 <p className="truncate text-sm font-semibold">
-                  {templates.preview_name || "Contact"}
+                  {previewValueForToken(templates, "1") || templates.preview_name || "Contact"}
                 </p>
               </div>
               <div className="min-h-[280px] bg-[#0b141a] px-3 py-4">
                 <div className="max-w-[85%] rounded-lg rounded-tl-none bg-[#005c4b] px-3 py-2 text-[13px] leading-snug whitespace-pre-wrap text-white shadow">
+                  {templates.whatsapp_header_format !== "NONE" ? (
+                    <div className="mb-2 overflow-hidden rounded bg-black/25 px-2 py-3 text-center text-[11px] text-white/80">
+                      {templates.whatsapp_header_format === "TEXT"
+                        ? applyTemplateVars(templates.whatsapp_header, templates) || "Header text"
+                        : templates.whatsapp_header_format === "IMAGE"
+                          ? "📷 Photo header"
+                          : templates.whatsapp_header_format === "VIDEO"
+                            ? "🎬 Video header"
+                            : "📄 Brochure / PDF header"}
+                      {templates.whatsapp_header_media_url ? (
+                        <p className="mt-1 truncate text-[10px] text-white/50">
+                          {templates.whatsapp_header_media_url}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {waPreview || (
                     <span className="italic text-white/60">Type WhatsApp content…</span>
                   )}
+                  {templates.whatsapp_button_text ? (
+                    <div className="mt-2 border-t border-white/20 pt-2 text-center text-[12px] font-semibold text-[#53bdeb]">
+                      {templates.whatsapp_button_text}
+                    </div>
+                  ) : null}
                   <div className="mt-1 text-right text-[10px] text-white/60">12:00</div>
                 </div>
               </div>
@@ -538,6 +752,139 @@ function TemplatesWorkspace({
           </div>
         )}
       </aside>
+    </div>
+  );
+}
+
+function TokenMapEditor({
+  tokenMap,
+  onChange,
+}: {
+  tokenMap: Record<string, string>;
+  onChange: (map: Record<string, string>) => void;
+}) {
+  const entries = Object.keys(tokenMap)
+    .map(Number)
+    .filter((n) => !Number.isNaN(n))
+    .sort((a, b) => a - b)
+    .map((n) => String(n));
+
+  const usedFields = new Set(Object.values(tokenMap));
+
+  const setField = (num: string, field: string) => {
+    onChange({ ...tokenMap, [num]: field });
+  };
+
+  const removeToken = (num: string) => {
+    if (entries.length <= 1) return;
+    const next = { ...tokenMap };
+    delete next[num];
+    onChange(next);
+  };
+
+  const addToken = () => {
+    const nextNum = entries.length
+      ? String(Math.max(...entries.map(Number)) + 1)
+      : "1";
+    const unused = REVIEW_FIELD_OPTIONS.find((o) => !usedFields.has(o.key));
+    onChange({
+      ...tokenMap,
+      [nextNum]: unused?.key || "fullName",
+    });
+  };
+
+  return (
+    <div className="border-t border-[var(--line)] pt-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">Token → Review field</p>
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            Choose which extracted Review field fills each {"{{N}}"} when a card is sent.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={addToken}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--line)] bg-white text-lg font-semibold text-[var(--brand)] shadow-sm hover:bg-slate-50"
+          title="Add token"
+          aria-label="Add token mapping"
+        >
+          +
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {entries.map((num) => (
+          <div key={num} className="flex items-end gap-2">
+            <label className="min-w-0 flex-1 text-sm">
+              <span className="mb-1.5 block font-medium">{`{{${num}}}`}</span>
+              <select
+                className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                value={tokenMap[num] || ""}
+                onChange={(e) => setField(num, e.target.value)}
+              >
+                {REVIEW_FIELD_OPTIONS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={entries.length <= 1}
+              onClick={() => removeToken(num)}
+              className="mb-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--line)] text-[var(--muted)] hover:bg-slate-50 hover:text-red-600 disabled:opacity-40"
+              title="Remove token"
+              aria-label={`Remove {{${num}}}`}
+            >
+              −
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TestSendBar({
+  label,
+  placeholder,
+  value,
+  onChange,
+  testing,
+  disabled,
+  onTest,
+  buttonLabel,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  testing: boolean;
+  disabled?: boolean;
+  onTest: () => void;
+  buttonLabel: string;
+}) {
+  return (
+    <div className="mt-6 flex flex-col gap-3 border-t border-[var(--line)] pt-5 sm:flex-row sm:items-end">
+      <label className="min-w-0 flex-1 text-sm">
+        <span className="mb-1.5 block font-medium">{label}</span>
+        <input
+          className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        disabled={testing || disabled}
+        onClick={onTest}
+        className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+      >
+        {testing ? "Testing…" : buttonLabel}
+      </button>
     </div>
   );
 }
