@@ -367,6 +367,15 @@ export async function saveAdminEnv(
   return normalizeAdminEnvItem(res.item);
 }
 
+/** Deletes CMS env for this Admin; scanner falls back to global .env. */
+export async function removeAdminEnv(adminId: string): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}`,
+    { method: "DELETE" },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
 export async function testAdminWhatsApp(
   adminId: string,
   payload: {

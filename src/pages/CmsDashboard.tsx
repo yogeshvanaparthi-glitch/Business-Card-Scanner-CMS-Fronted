@@ -11,6 +11,7 @@ import {
   fetchEmailShell,
   previewValueForToken,
   REVIEW_FIELD_OPTIONS,
+  removeAdminEnv,
   saveAdminEnv,
   SECRET_EMAIL,
   SECRET_WHATSAPP,
@@ -54,6 +55,30 @@ export function CmsDashboard() {
       setLoading(false);
     }
   }, []);
+
+  const removeEnv = async (admin: AdminEnvRow) => {
+    const name = displayName(admin);
+    if (
+      !window.confirm(
+        `Remove all CMS WhatsApp, Email, and template settings for ${name}?\n\nThey will fall back to the server .env until you save again.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const next = await removeAdminEnv(admin.admin_id);
+      setAdmins((prev) => prev.map((a) => (a.admin_id === next.admin_id ? next : a)));
+      setMessage({
+        type: "ok",
+        text: `Removed CMS environment for ${name}. Using global .env.`,
+      });
+    } catch (err) {
+      setMessage({
+        type: "err",
+        text: err instanceof Error ? err.message : "Remove failed",
+      });
+    }
+  };
 
   useEffect(() => {
     if (isAuthenticated) void load();
@@ -143,42 +168,62 @@ export function CmsDashboard() {
                   const active = admin.admin_id === selectedId;
                   return (
                     <li key={admin.admin_id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(admin.admin_id)}
-                        className={`w-full px-4 py-3.5 text-left transition sm:px-5 ${
+                      <div
+                        className={`flex items-stretch gap-1 transition ${
                           active
                             ? "border-l-4 border-l-[var(--brand)] bg-[var(--brand-soft)]/50"
                             : "border-l-4 border-l-transparent hover:bg-slate-50"
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="font-semibold text-[var(--ink)]">
-                            {displayName(admin)}
-                          </span>
-                          <StatusDot
-                            ok={admin.is_active}
-                            title={admin.is_active ? "Active" : "Inactive"}
-                          />
-                        </div>
-                        <p className="mt-0.5 truncate text-sm text-[var(--muted)]">{admin.email}</p>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {admin.company_name ? (
-                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
-                              {admin.company_name}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(admin.admin_id)}
+                          className="min-w-0 flex-1 px-4 py-3.5 text-left sm:px-5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-semibold text-[var(--ink)]">
+                              {displayName(admin)}
                             </span>
-                          ) : null}
-                          <span
-                            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                              admin.has_settings
-                                ? "bg-teal-100 text-teal-800"
-                                : "bg-amber-50 text-amber-800"
-                            }`}
+                            <StatusDot
+                              ok={admin.is_active}
+                              title={admin.is_active ? "Active" : "Inactive"}
+                            />
+                          </div>
+                          <p className="mt-0.5 truncate text-sm text-[var(--muted)]">
+                            {admin.email}
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {admin.company_name ? (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+                                {admin.company_name}
+                              </span>
+                            ) : null}
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                                admin.has_settings
+                                  ? "bg-teal-100 text-teal-800"
+                                  : "bg-amber-50 text-amber-800"
+                              }`}
+                            >
+                              {admin.has_settings ? "Env saved" : "Env empty"}
+                            </span>
+                          </div>
+                        </button>
+                        {admin.has_settings ? (
+                          <button
+                            type="button"
+                            title="Remove CMS env"
+                            aria-label={`Remove CMS env for ${displayName(admin)}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void removeEnv(admin);
+                            }}
+                            className="shrink-0 self-center px-3 py-2 text-xs font-semibold text-[var(--danger)] hover:bg-red-50"
                           >
-                            {admin.has_settings ? "Env saved" : "Env empty"}
-                          </span>
-                        </div>
-                      </button>
+                            Remove
+                          </button>
+                        ) : null}
+                      </div>
                     </li>
                   );
                 })}
@@ -199,6 +244,15 @@ export function CmsDashboard() {
                 setMessage({
                   type: "ok",
                   text: `Saved environment for ${displayName(next)}.`,
+                });
+              }}
+              onRemoved={(next) => {
+                setAdmins((prev) =>
+                  prev.map((a) => (a.admin_id === next.admin_id ? next : a)),
+                );
+                setMessage({
+                  type: "ok",
+                  text: `Removed CMS environment for ${displayName(next)}. Using global .env.`,
                 });
               }}
               onOk={(text) => setMessage({ type: "ok", text })}
@@ -229,11 +283,13 @@ function StatusDot({ ok, title }: { ok: boolean; title: string }) {
 function AdminEnvEditor({
   admin,
   onSaved,
+  onRemoved,
   onOk,
   onError,
 }: {
   admin: AdminEnvRow;
   onSaved: (row: AdminEnvRow) => void;
+  onRemoved: (row: AdminEnvRow) => void;
   onOk: (text: string) => void;
   onError: (text: string) => void;
 }) {
@@ -241,6 +297,7 @@ function AdminEnvEditor({
   const [emailEnv, setEmailEnv] = useState<EmailEnv>(admin.emailEnv);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testPhone, setTestPhone] = useState("");
   const [testEmailAddr, setTestEmailAddr] = useState("");
@@ -268,6 +325,25 @@ function AdminEnvEditor({
       onError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const remove = async () => {
+    if (
+      !window.confirm(
+        `Remove all CMS WhatsApp, Email, and template settings for ${displayName(admin)}?\n\nThey will fall back to the server .env until you save again.`,
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    try {
+      const next = await removeAdminEnv(admin.admin_id);
+      onRemoved(next);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Remove failed");
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -326,14 +402,24 @@ function AdminEnvEditor({
             {admin.phone ? ` · ${admin.phone}` : ""}
           </p>
         </div>
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => void save()}
-          className="shrink-0 rounded-md bg-[var(--brand)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--brand-ink)] disabled:opacity-50"
-        >
-          {saving ? "Saving…" : "Save"}
-        </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={removing || saving || !admin.has_settings}
+            onClick={() => void remove()}
+            className="rounded-md border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-[var(--danger)] shadow-sm hover:bg-red-50 disabled:opacity-40"
+          >
+            {removing ? "Removing…" : "Remove"}
+          </button>
+          <button
+            type="button"
+            disabled={saving || removing}
+            onClick={() => void save()}
+            className="rounded-md bg-[var(--brand)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--brand-ink)] disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
       </div>
 
       <div className="w-full border-b border-[var(--line)] bg-[var(--surface)] px-4 sm:px-6 lg:px-8">
