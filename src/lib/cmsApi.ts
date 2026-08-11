@@ -28,6 +28,19 @@ export type EmailEnv = {
   enabled: boolean;
 };
 
+export type GoogleSheetsEnv = {
+  google_sheet_id: string;
+  google_sheet_name: string;
+  google_service_account_json: string;
+  google_service_account_json_set?: boolean;
+  google_drive_folder_id: string;
+  google_oauth_client_id: string;
+  google_oauth_client_secret: string;
+  google_oauth_client_secret_set?: boolean;
+  google_oauth_redirect_uri: string;
+  enabled: boolean;
+};
+
 export type WhatsAppHeaderFormat = "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
 
 export type TemplateEnv = {
@@ -65,6 +78,7 @@ export type AdminEnvRow = {
   has_settings: boolean;
   whatsapp: WhatsAppEnv;
   emailEnv: EmailEnv;
+  googleSheets: GoogleSheetsEnv;
   templates: TemplateEnv;
   settings_updated_at?: string | null;
 };
@@ -147,6 +161,17 @@ const EMPTY_EMAIL: EmailEnv = {
   enabled: false,
 };
 
+const EMPTY_GOOGLE_SHEETS: GoogleSheetsEnv = {
+  google_sheet_id: "",
+  google_sheet_name: "Day 1",
+  google_service_account_json: "",
+  google_drive_folder_id: "",
+  google_oauth_client_id: "",
+  google_oauth_client_secret: "",
+  google_oauth_redirect_uri: "",
+  enabled: false,
+};
+
 export const EMPTY_TEMPLATES: TemplateEnv = {
   email_subject: "Thank you for connecting, {{1}}",
   email_body: "",
@@ -215,6 +240,29 @@ function asEmail(raw: unknown): EmailEnv {
     smtp_password: String(o.smtp_password ?? ""),
     smtp_password_set: Boolean(o.smtp_password_set),
     smtp_from: String(o.smtp_from ?? o.sender_email ?? ""),
+    enabled: Boolean(o.enabled),
+  };
+}
+
+function asGoogleSheets(raw: unknown): GoogleSheetsEnv {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    ...EMPTY_GOOGLE_SHEETS,
+    google_sheet_id: String(o.google_sheet_id ?? o.sheet_id ?? ""),
+    google_sheet_name: String(o.google_sheet_name ?? o.sheet_name ?? EMPTY_GOOGLE_SHEETS.google_sheet_name),
+    google_service_account_json: String(o.google_service_account_json ?? o.service_account_json ?? ""),
+    google_service_account_json_set: Boolean(
+      o.google_service_account_json_set || o.service_account_json_set,
+    ),
+    google_drive_folder_id: String(
+      o.google_drive_folder_id ?? o.google_root_folder_id ?? o.drive_folder_id ?? "",
+    ),
+    google_oauth_client_id: String(o.google_oauth_client_id ?? o.oauth_client_id ?? ""),
+    google_oauth_client_secret: String(o.google_oauth_client_secret ?? o.oauth_client_secret ?? ""),
+    google_oauth_client_secret_set: Boolean(
+      o.google_oauth_client_secret_set || o.oauth_client_secret_set,
+    ),
+    google_oauth_redirect_uri: String(o.google_oauth_redirect_uri ?? o.oauth_redirect_uri ?? ""),
     enabled: Boolean(o.enabled),
   };
 }
@@ -334,6 +382,7 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     has_settings: Boolean(raw.has_settings),
     whatsapp: asWhatsApp(raw.whatsapp),
     emailEnv: asEmail(raw.email_settings),
+    googleSheets: asGoogleSheets(raw.google_sheets),
     templates: asTemplates(raw.templates),
     settings_updated_at: raw.settings_updated_at ? String(raw.settings_updated_at) : null,
   };
@@ -351,7 +400,12 @@ export async function fetchEmailShell(): Promise<string> {
 
 export async function saveAdminEnv(
   adminId: string,
-  payload: { whatsapp: WhatsAppEnv; email: EmailEnv; templates: TemplateEnv },
+  payload: {
+    whatsapp: WhatsAppEnv;
+    email: EmailEnv;
+    templates: TemplateEnv;
+    googleSheets: GoogleSheetsEnv;
+  },
 ): Promise<AdminEnvRow> {
   const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
     `/api/cms/admin-env/${adminId}`,
@@ -361,6 +415,10 @@ export async function saveAdminEnv(
         whatsapp: { ...payload.whatsapp, enabled: Boolean(payload.whatsapp.enabled) },
         email: { ...payload.email, enabled: Boolean(payload.email.enabled) },
         templates: payload.templates,
+        google_sheets: {
+          ...payload.googleSheets,
+          enabled: Boolean(payload.googleSheets.enabled),
+        },
       }),
     },
   );
@@ -412,6 +470,18 @@ export async function testAdminEmail(
   });
 }
 
+export async function testAdminGoogleSheets(
+  adminId: string,
+  payload: { googleSheets: GoogleSheetsEnv },
+): Promise<{ success: boolean; message?: string; sheet_id?: string; sheet_title?: string }> {
+  return apiJson(`/api/cms/admin-env/${adminId}/test-google-sheets`, {
+    method: "POST",
+    body: JSON.stringify({
+      google_sheets: { ...payload.googleSheets, enabled: true },
+    }),
+  });
+}
+
 export function displayName(row: Pick<AdminEnvRow, "first_name" | "last_name" | "email">): string {
   const name = `${row.first_name || ""} ${row.last_name || ""}`.trim();
   return name || row.email;
@@ -438,6 +508,16 @@ export const EMAIL_FIELD_LABELS: Partial<Record<keyof EmailEnv, string>> = {
   smtp_from: "SMTP_FROM",
 };
 
+export const GOOGLE_SHEETS_FIELD_LABELS: Partial<Record<keyof GoogleSheetsEnv, string>> = {
+  google_sheet_id: "Google Sheet ID",
+  google_sheet_name: "Google Sheet Name",
+  google_service_account_json: "Google Service Account JSON",
+  google_drive_folder_id: "Google Root Folder ID",
+  google_oauth_client_id: "Google OAuth Client ID",
+  google_oauth_client_secret: "Google OAuth Client Secret",
+  google_oauth_redirect_uri: "Google OAuth Redirect URI",
+};
+
 export const WHATSAPP_INPUT_KEYS: (keyof WhatsAppEnv)[] = [
   "app_id",
   "access_token",
@@ -459,5 +539,19 @@ export const EMAIL_INPUT_KEYS: (keyof EmailEnv)[] = [
   "smtp_from",
 ];
 
+export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
+  "google_sheet_id",
+  "google_sheet_name",
+  "google_service_account_json",
+  "google_drive_folder_id",
+  "google_oauth_client_id",
+  "google_oauth_client_secret",
+  "google_oauth_redirect_uri",
+];
+
 export const SECRET_WHATSAPP = new Set<string>(["access_token", "app_secret"]);
 export const SECRET_EMAIL = new Set<string>(["smtp_password"]);
+export const SECRET_GOOGLE_SHEETS = new Set<string>([
+  "google_service_account_json",
+  "google_oauth_client_secret",
+]);

@@ -9,19 +9,24 @@ import {
   EMAIL_INPUT_KEYS,
   fetchAdminEnvList,
   fetchEmailShell,
+  GOOGLE_SHEETS_FIELD_LABELS,
+  GOOGLE_SHEETS_INPUT_KEYS,
   previewValueForToken,
   REVIEW_FIELD_OPTIONS,
   removeAdminEnv,
   saveAdminEnv,
   SECRET_EMAIL,
+  SECRET_GOOGLE_SHEETS,
   SECRET_WHATSAPP,
   testAdminEmail,
+  testAdminGoogleSheets,
   testAdminWhatsApp,
   WHATSAPP_FIELD_LABELS,
   WHATSAPP_HEADER_FORMATS,
   WHATSAPP_INPUT_KEYS,
   type AdminEnvRow,
   type EmailEnv,
+  type GoogleSheetsEnv,
   type TemplateEnv,
   type WhatsAppEnv,
   type WhatsAppHeaderFormat,
@@ -295,17 +300,19 @@ function AdminEnvEditor({
 }) {
   const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>(admin.whatsapp);
   const [emailEnv, setEmailEnv] = useState<EmailEnv>(admin.emailEnv);
+  const [googleSheets, setGoogleSheets] = useState<GoogleSheetsEnv>(admin.googleSheets);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testPhone, setTestPhone] = useState("");
   const [testEmailAddr, setTestEmailAddr] = useState("");
-  const [section, setSection] = useState<"whatsapp" | "email" | "templates">("templates");
+  const [section, setSection] = useState<"whatsapp" | "email" | "templates" | "google">("templates");
 
   useEffect(() => {
     setWhatsapp(admin.whatsapp);
     setEmailEnv(admin.emailEnv);
+    setGoogleSheets(admin.googleSheets);
     setTemplates(admin.templates);
     setSection("templates");
     setTestPhone(admin.phone || "");
@@ -319,6 +326,7 @@ function AdminEnvEditor({
         whatsapp,
         email: emailEnv,
         templates,
+        googleSheets,
       });
       onSaved(next);
     } catch (err) {
@@ -331,7 +339,7 @@ function AdminEnvEditor({
   const remove = async () => {
     if (
       !window.confirm(
-        `Remove all CMS WhatsApp, Email, and template settings for ${displayName(admin)}?\n\nThey will fall back to the server .env until you save again.`,
+        `Remove all CMS WhatsApp, Email, Google Sheets, and template settings for ${displayName(admin)}?\n\nThey will fall back to the server .env until you save again.`,
       )
     ) {
       return;
@@ -391,6 +399,18 @@ function AdminEnvEditor({
     }
   };
 
+  const runGoogleSheetsTest = async () => {
+    setTesting(true);
+    try {
+      const res = await testAdminGoogleSheets(admin.admin_id, { googleSheets });
+      onOk(res.message || "Google Sheets connection successful.");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Google Sheets connection failed");
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="flex h-full w-full flex-col">
       <div className="flex w-full flex-col gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
@@ -429,6 +449,7 @@ function AdminEnvEditor({
               ["templates", "Templates & preview"],
               ["whatsapp", "WhatsApp env"],
               ["email", "Email env"],
+              ["google", "Google Sheets"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -499,7 +520,7 @@ function AdminEnvEditor({
               />
             </FormSection>
           </div>
-        ) : (
+        ) : section === "email" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
             <FormSection
               title="Email environment"
@@ -532,6 +553,61 @@ function AdminEnvEditor({
                 onTest={() => void runEmailTest()}
                 buttonLabel="Test Email"
               />
+            </FormSection>
+          </div>
+        ) : (
+          <div className="px-4 py-6 sm:px-6 lg:px-8">
+            <FormSection
+              title="Google Sheets configuration"
+              enabled={googleSheets.enabled}
+              onEnabledChange={(enabled) => setGoogleSheets((g) => ({ ...g, enabled }))}
+            >
+              <p className="mb-4 text-sm text-[var(--muted)]">
+                Per-Admin Google Sheets credentials used when contacts sync to Sheets. Service
+                account JSON and OAuth client secret are masked after save — leave blank to keep
+                existing values. Maps to{" "}
+                <code className="text-[var(--ink)]">GOOGLE_SHEET_*</code> /{" "}
+                <code className="text-[var(--ink)]">GOOGLE_OAUTH_*</code> /{" "}
+                <code className="text-[var(--ink)]">GOOGLE_DRIVE_FOLDER_ID</code>.
+              </p>
+              <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {GOOGLE_SHEETS_INPUT_KEYS.map((key) => (
+                  <Field
+                    key={key}
+                    label={GOOGLE_SHEETS_FIELD_LABELS[key] || key}
+                    secret={SECRET_GOOGLE_SHEETS.has(key)}
+                    multiline={key === "google_service_account_json"}
+                    className={
+                      key === "google_service_account_json" || key === "google_oauth_redirect_uri"
+                        ? "md:col-span-2 xl:col-span-2"
+                        : undefined
+                    }
+                    hint={
+                      key === "google_service_account_json" &&
+                      googleSheets.google_service_account_json_set
+                        ? "Saved — leave blank to keep"
+                        : key === "google_oauth_client_secret" &&
+                            googleSheets.google_oauth_client_secret_set
+                          ? "Saved — leave blank to keep"
+                          : key === "google_drive_folder_id"
+                            ? "Optional Drive folder (GOOGLE_DRIVE_FOLDER_ID)"
+                            : undefined
+                    }
+                    value={String(googleSheets[key] ?? "")}
+                    onChange={(v) => setGoogleSheets((g) => ({ ...g, [key]: v }))}
+                  />
+                ))}
+              </div>
+              <div className="mt-6 flex flex-col gap-3 border-t border-[var(--line)] pt-5 sm:flex-row sm:items-center sm:justify-end">
+                <button
+                  type="button"
+                  disabled={testing || saving}
+                  onClick={() => void runGoogleSheetsTest()}
+                  className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+                >
+                  {testing ? "Testing…" : "Test Connection"}
+                </button>
+              </div>
             </FormSection>
           </div>
         )}
@@ -1022,24 +1098,40 @@ function Field({
   onChange,
   secret,
   hint,
+  multiline,
+  className,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   secret?: boolean;
   hint?: string;
+  multiline?: boolean;
+  className?: string;
 }) {
+  const displayValue = value === "••••••••" ? "" : value;
   return (
-    <label className="block w-full text-sm">
+    <label className={`block w-full text-sm ${className || ""}`}>
       <span className="mb-1.5 block font-medium text-[var(--ink)]">{label}</span>
-      <input
-        type={secret ? "password" : "text"}
-        className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-[var(--ink)] shadow-sm placeholder:text-slate-400 focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-        value={value === "••••••••" ? "" : value}
-        placeholder={secret ? "Enter new value to update" : `Enter ${label.toLowerCase()}`}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete="off"
-      />
+      {multiline ? (
+        <textarea
+          className="min-h-28 w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 font-mono text-xs text-[var(--ink)] shadow-sm placeholder:text-slate-400 focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+          value={displayValue}
+          placeholder={secret ? "Paste new JSON to update" : `Enter ${label.toLowerCase()}`}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      ) : (
+        <input
+          type={secret ? "password" : "text"}
+          className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-[var(--ink)] shadow-sm placeholder:text-slate-400 focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+          value={displayValue}
+          placeholder={secret ? "Enter new value to update" : `Enter ${label.toLowerCase()}`}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="off"
+        />
+      )}
       {hint ? <span className="mt-1 block text-xs text-[var(--muted)]">{hint}</span> : null}
     </label>
   );
