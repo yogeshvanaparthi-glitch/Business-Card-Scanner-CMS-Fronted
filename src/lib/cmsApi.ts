@@ -4,17 +4,17 @@ export type WhatsAppEnv = {
   app_id: string;
   access_token: string;
   access_token_set?: boolean;
-  phone_number_id: string;
-  business_account_id: string;
-  business_phone: string;
   graph_api_version: string;
+  phone_number_id: string;
+  business_phone: string;
+  business_account_id: string;
   app_secret: string;
   app_secret_set?: boolean;
   verify_token: string;
-  /** Meta message template name, e.g. cardscan_intro */
-  template_name: string;
-  /** Meta template language, e.g. en_US */
   template_language_code: string;
+  business_card_template_name: string;
+  card_received_template_name: string;
+  scan_template_name: string;
   enabled: boolean;
 };
 
@@ -25,6 +25,8 @@ export type EmailEnv = {
   smtp_password: string;
   smtp_password_set?: boolean;
   smtp_from: string;
+  /** Optional: receives a copy of receiver/contact details after a successful send. */
+  sender_notification_email: string;
   enabled: boolean;
 };
 
@@ -66,6 +68,8 @@ export type TemplateEnv = {
 
 export type AdminEnvRow = {
   admin_id: string;
+  /** Tenant key: company_id when present, otherwise admin_id. */
+  tenant_id: string;
   email: string;
   first_name: string;
   last_name: string;
@@ -81,6 +85,87 @@ export type AdminEnvRow = {
   googleSheets: GoogleSheetsEnv;
   templates: TemplateEnv;
   settings_updated_at?: string | null;
+  config_version?: number;
+  project_config_version?: number | null;
+  sync_status?: string;
+  last_health_at?: string | null;
+  last_health?: Record<string, unknown> | null;
+  test_users_limit?: number;
+  environment?: EnvironmentMeta;
+};
+
+export type EnvironmentMeta = {
+  stored: boolean;
+  connected: boolean;
+  sync_status: string;
+  cms_version: number;
+  project_version: number | null;
+  synchronized: boolean;
+  last_updated?: string | null;
+  last_checked?: string | null;
+};
+
+export type EnvironmentCheckResult = {
+  success: boolean;
+  status?: string;
+  message?: string;
+  reason?: string | null;
+  action?: string | null;
+  sync_status?: string;
+  checked_at?: string;
+  tenant?: {
+    admin_id?: string;
+    tenant_id?: string;
+    company_name?: string;
+    email?: string;
+  };
+  versions?: {
+    cms?: number;
+    project?: number | null;
+    synchronized?: boolean;
+  };
+  checks?: Record<string, boolean | null | undefined>;
+  integrations?: Record<string, { status?: string; message?: string }>;
+  configuration?: {
+    stored?: boolean;
+    status?: string;
+    updated_at?: string | null;
+  };
+};
+
+export type TestUserRow = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  is_active?: boolean;
+  check_status?: string;
+  last_test?: string | null;
+  reason?: string | null;
+  created_at?: string | null;
+};
+
+export type TestUsersSummary = {
+  admin_id: string;
+  tenant_id?: string;
+  company_name?: string;
+  configured: number;
+  created: number;
+  available: number;
+  remaining: number;
+  users: TestUserRow[];
+  note?: string | null;
+};
+
+export type TestUsersCheckResult = {
+  success: boolean;
+  passed: number;
+  total: number;
+  configured: number;
+  message: string;
+  users: TestUserRow[];
+  checked_at?: string;
 };
 
 /** Same fields as the scanner Review page (plus event / sign-off). */
@@ -141,14 +226,16 @@ const PREVIEW_SAMPLES: Record<string, string> = {
 const EMPTY_WHATSAPP: WhatsAppEnv = {
   app_id: "",
   access_token: "",
-  phone_number_id: "",
-  business_account_id: "",
-  business_phone: "",
   graph_api_version: "v25.0",
+  phone_number_id: "",
+  business_phone: "",
+  business_account_id: "",
   app_secret: "",
   verify_token: "",
-  template_name: "card_final_ula",
-  template_language_code: "en",
+  template_language_code: "",
+  business_card_template_name: "",
+  card_received_template_name: "",
+  scan_template_name: "",
   enabled: false,
 };
 
@@ -158,6 +245,7 @@ const EMPTY_EMAIL: EmailEnv = {
   smtp_user: "",
   smtp_password: "",
   smtp_from: "",
+  sender_notification_email: "",
   enabled: false,
 };
 
@@ -201,31 +289,32 @@ function asWhatsApp(raw: unknown): WhatsAppEnv {
   const version =
     String(o.graph_api_version ?? o.api_version ?? EMPTY_WHATSAPP.graph_api_version) ||
     EMPTY_WHATSAPP.graph_api_version;
-  const lang =
-    String(o.template_language_code ?? o.language ?? EMPTY_WHATSAPP.template_language_code) ||
-    EMPTY_WHATSAPP.template_language_code;
-  const tplName =
-    String(
-      o.template_name ??
-        o.card_received_template_name ??
-        o.business_card_template_name ??
-        o.scan_template_name ??
-        EMPTY_WHATSAPP.template_name,
-    ) || EMPTY_WHATSAPP.template_name;
   return {
     ...EMPTY_WHATSAPP,
     app_id: String(o.app_id ?? ""),
     access_token: access,
     access_token_set: Boolean(o.access_token_set || o.permanent_token_set),
-    phone_number_id: String(o.phone_number_id ?? ""),
-    business_account_id: waba,
-    business_phone: phone,
     graph_api_version: version,
+    phone_number_id: String(o.phone_number_id ?? ""),
+    business_phone: phone,
+    business_account_id: waba,
     app_secret: String(o.app_secret ?? ""),
     app_secret_set: Boolean(o.app_secret_set),
     verify_token: String(o.verify_token ?? ""),
-    template_name: tplName,
-    template_language_code: lang,
+    template_language_code: String(
+      o.template_language_code ?? o.language ?? EMPTY_WHATSAPP.template_language_code,
+    ),
+    business_card_template_name: String(
+      o.business_card_template_name ?? EMPTY_WHATSAPP.business_card_template_name,
+    ),
+    card_received_template_name: String(
+      o.card_received_template_name ??
+        o.card_received_template ??
+        EMPTY_WHATSAPP.card_received_template_name,
+    ),
+    scan_template_name: String(
+      o.scan_template_name ?? o.scan_template ?? EMPTY_WHATSAPP.scan_template_name,
+    ),
     enabled: Boolean(o.enabled),
   };
 }
@@ -240,6 +329,9 @@ function asEmail(raw: unknown): EmailEnv {
     smtp_password: String(o.smtp_password ?? ""),
     smtp_password_set: Boolean(o.smtp_password_set),
     smtp_from: String(o.smtp_from ?? o.sender_email ?? ""),
+    sender_notification_email: String(
+      o.sender_notification_email ?? o.SENDER_NOTIFICATION_EMAIL ?? "",
+    ),
     enabled: Boolean(o.enabled),
   };
 }
@@ -368,14 +460,21 @@ export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEn
 }
 
 export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow {
+  const adminId = String(raw.admin_id ?? "");
+  const companyId = raw.company_id ? String(raw.company_id) : null;
+  const environmentRaw =
+    raw.environment && typeof raw.environment === "object"
+      ? (raw.environment as Record<string, unknown>)
+      : null;
   return {
-    admin_id: String(raw.admin_id ?? ""),
+    admin_id: adminId,
+    tenant_id: String(raw.tenant_id ?? companyId ?? adminId),
     email: String(raw.email ?? ""),
     first_name: String(raw.first_name ?? ""),
     last_name: String(raw.last_name ?? ""),
     phone: String(raw.phone ?? ""),
     is_active: Boolean(raw.is_active),
-    company_id: raw.company_id ? String(raw.company_id) : null,
+    company_id: companyId,
     company_name: String(raw.company_name ?? ""),
     created_at: raw.created_at ? String(raw.created_at) : undefined,
     updated_at: raw.updated_at ? String(raw.updated_at) : undefined,
@@ -385,6 +484,38 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     googleSheets: asGoogleSheets(raw.google_sheets),
     templates: asTemplates(raw.templates),
     settings_updated_at: raw.settings_updated_at ? String(raw.settings_updated_at) : null,
+    config_version: Number(raw.config_version ?? 0) || 0,
+    project_config_version:
+      raw.project_config_version === null || raw.project_config_version === undefined
+        ? null
+        : Number(raw.project_config_version),
+    sync_status: String(raw.sync_status ?? (raw.has_settings ? "unknown" : "missing")),
+    last_health_at: raw.last_health_at ? String(raw.last_health_at) : null,
+    last_health:
+      raw.last_health && typeof raw.last_health === "object"
+        ? (raw.last_health as Record<string, unknown>)
+        : null,
+    test_users_limit: Number(raw.test_users_limit ?? 0) || 0,
+    environment: environmentRaw
+      ? {
+          stored: Boolean(environmentRaw.stored),
+          connected: Boolean(environmentRaw.connected),
+          sync_status: String(environmentRaw.sync_status ?? "unknown"),
+          cms_version: Number(environmentRaw.cms_version ?? 0) || 0,
+          project_version:
+            environmentRaw.project_version === null ||
+            environmentRaw.project_version === undefined
+              ? null
+              : Number(environmentRaw.project_version),
+          synchronized: Boolean(environmentRaw.synchronized),
+          last_updated: environmentRaw.last_updated
+            ? String(environmentRaw.last_updated)
+            : null,
+          last_checked: environmentRaw.last_checked
+            ? String(environmentRaw.last_checked)
+            : null,
+        }
+      : undefined,
   };
 }
 
@@ -434,20 +565,87 @@ export async function removeAdminEnv(adminId: string): Promise<AdminEnvRow> {
   return normalizeAdminEnvItem(res.item);
 }
 
+export type WhatsAppCheckStatus = "ok" | "warn" | "error" | "skip";
+
+export type WhatsAppSetupCheck = {
+  id: string;
+  label: string;
+  status: WhatsAppCheckStatus;
+  detail: string;
+  fix?: string | null;
+};
+
+export type WhatsAppInspectResult = {
+  success: boolean;
+  overall: WhatsAppCheckStatus;
+  summary: { checks_total: number; checks_ok: number; checks_error: number };
+  checklist: WhatsAppSetupCheck[];
+  phone?: Record<string, unknown> | null;
+  waba?: Record<string, unknown> | null;
+  waba_phones?: Array<Record<string, unknown>>;
+  webhook?: { subscribed?: boolean; app_ids?: string[]; reason?: string; action?: string };
+  token_debug?: Record<string, unknown>;
+  templates?: Array<{
+    name?: string;
+    language?: string;
+    status?: string;
+    category?: string;
+    body_preview?: string;
+  }>;
+  configured_templates?: Array<{
+    label: string;
+    configured_name: string;
+    configured_language: string;
+    found: boolean;
+    meta_status?: string;
+    meta_language?: string;
+    approved: boolean;
+  }>;
+  meta_console_links?: {
+    whatsapp_manager?: string;
+    developer_app?: string | null;
+    api_setup?: string | null;
+  };
+  still_requires_meta_console?: string[];
+};
+
+export async function inspectAdminWhatsApp(
+  adminId: string,
+  whatsapp?: Partial<WhatsAppEnv>,
+): Promise<WhatsAppInspectResult> {
+  return apiJson(`/api/cms/admin-env/${adminId}/whatsapp-inspect`, {
+    method: "POST",
+    body: JSON.stringify({ whatsapp: whatsapp ?? undefined }),
+  });
+}
+
+export async function subscribeAdminWhatsAppWebhook(
+  adminId: string,
+  whatsapp?: Partial<WhatsAppEnv>,
+): Promise<{ success: boolean; subscribed?: boolean; action?: string; app_ids?: string[] }> {
+  return apiJson(`/api/cms/admin-env/${adminId}/whatsapp-subscribe-webhook`, {
+    method: "POST",
+    body: JSON.stringify({ whatsapp: whatsapp ?? undefined }),
+  });
+}
+
 export async function testAdminWhatsApp(
   adminId: string,
-  payload: {
-    contact_phone: string;
-    whatsapp: WhatsAppEnv;
-    templates: TemplateEnv;
-  },
-): Promise<{ success: boolean; message_id?: string; template?: string; to?: string }> {
+  contactPhone: string,
+  whatsapp?: Partial<WhatsAppEnv>,
+): Promise<{
+  success: boolean;
+  message?: string;
+  message_id?: string;
+  template?: string;
+  language?: string;
+  to?: string;
+}> {
   return apiJson(`/api/cms/admin-env/${adminId}/test-whatsapp`, {
     method: "POST",
     body: JSON.stringify({
-      contact_phone: payload.contact_phone,
-      whatsapp: { ...payload.whatsapp, enabled: true },
-      templates: payload.templates,
+      contact_phone: contactPhone,
+      whatsapp: whatsapp ?? undefined,
     }),
   });
 }
@@ -473,7 +671,7 @@ export async function testAdminEmail(
 export async function testAdminGoogleSheets(
   adminId: string,
   payload: { googleSheets: GoogleSheetsEnv },
-): Promise<{ success: boolean; message?: string; sheet_id?: string; sheet_title?: string }> {
+): Promise<GoogleSheetsHealthResult> {
   return apiJson(`/api/cms/admin-env/${adminId}/test-google-sheets`, {
     method: "POST",
     body: JSON.stringify({
@@ -482,22 +680,192 @@ export async function testAdminGoogleSheets(
   });
 }
 
+export async function checkAdminEnvironment(
+  adminId: string,
+): Promise<EnvironmentCheckResult> {
+  return apiJson(`/api/cms/admin-env/${adminId}/check-environment`, {
+    method: "POST",
+  });
+}
+
+export async function fetchAdminTestUsers(adminId: string): Promise<TestUsersSummary> {
+  return apiJson(`/api/cms/admin-env/${adminId}/test-users`);
+}
+
+export async function saveAdminTestUsersLimit(
+  adminId: string,
+  limit: number,
+): Promise<TestUsersSummary & { success: boolean }> {
+  return apiJson(`/api/cms/admin-env/${adminId}/test-users`, {
+    method: "PUT",
+    body: JSON.stringify({ limit }),
+  });
+}
+
+export async function checkAdminTestUsers(
+  adminId: string,
+): Promise<TestUsersCheckResult> {
+  return apiJson(`/api/cms/admin-env/${adminId}/test-users/check`, {
+    method: "POST",
+  });
+}
+
+export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): string {
+  const tenant = res.tenant?.company_name || res.tenant?.email || "Tenant";
+  const stamp = res.checked_at ? new Date(res.checked_at).toLocaleString() : new Date().toLocaleString();
+  const checkLine = (label: string, value: boolean | null | undefined) => {
+    if (value === true) return `${label}: ✓`;
+    if (value === false) return `${label}: ✕`;
+    return `${label}: —`;
+  };
+  const integrations = res.integrations || {};
+  const integLines = Object.entries(integrations).map(([key, val]) => {
+    const status = String(val?.status || "disabled");
+    const mark =
+      status === "pass"
+        ? "✓"
+        : status === "fail"
+          ? "✕"
+          : status === "warn"
+            ? "!"
+            : "–";
+    return `${key}: ${mark} ${status}`;
+  });
+
+  if (res.success) {
+    return [
+      "✓ Environment Connected Successfully",
+      "",
+      `Tenant: ${tenant}`,
+      "CMS Configuration: ✓ Stored",
+      "Project Environment: ✓ Connected",
+      `CMS Version: ${res.versions?.cms ?? "—"}`,
+      `Project Version: ${res.versions?.project ?? "—"}`,
+      "Environment Health: ✓ Healthy",
+      "",
+      ...integLines,
+      "",
+      "Environment data is stored in CMS and successfully connected to the project environment.",
+      `Last Checked: ${stamp}`,
+    ].join("\n");
+  }
+
+  return [
+    "✕ Environment Connection Failed",
+    "",
+    checkLine("Configuration stored", res.configuration?.stored ?? res.checks?.configurationExists),
+    checkLine("Configuration loaded", res.checks?.configurationLoaded),
+    checkLine("Backend reachable", res.checks?.backendReachable),
+    checkLine("Environment synchronized", res.checks?.environmentSynchronized),
+    "",
+    `Reason: ${res.reason || res.message || "Connection failed."}`,
+    res.action ? `Action: ${res.action}` : "",
+    `Last Checked: ${stamp}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export type GoogleSheetsHealthCheckKey =
+  | "configuration"
+  | "authentication"
+  | "spreadsheetAccess"
+  | "sheetAccess"
+  | "readAccess"
+  | "writeAccess";
+
+export type GoogleSheetsHealthChecks = Partial<
+  Record<GoogleSheetsHealthCheckKey, boolean | null>
+>;
+
+export type GoogleSheetsHealthResult = {
+  success: boolean;
+  status?: "connected" | "failed" | string;
+  checks?: GoogleSheetsHealthChecks;
+  message?: string;
+  reason?: string;
+  spreadsheetName?: string | null;
+  sheet_id?: string | null;
+  sheet_title?: string | null;
+  writeVerified?: boolean | null;
+  worksheet_titles?: string[] | null;
+};
+
+export function formatGoogleSheetsHealthMessage(
+  res: GoogleSheetsHealthResult,
+  checkedAt: Date = new Date(),
+): string {
+  const checks = res.checks || {};
+  const label = (value: boolean | null | undefined): string => {
+    if (value === true) return "Connected";
+    if (value === false) return "Failed";
+    return "Not Checked";
+  };
+  const sheetLabel = (value: boolean | null | undefined): string => {
+    if (value === true) return "Found";
+    if (value === false) return "Not Found";
+    return "Not Checked";
+  };
+  const accessLabel = (value: boolean | null | undefined, kind: "read" | "write"): string => {
+    if (value === true) return "Working";
+    if (value === false) return "Failed";
+    if (kind === "write" && res.success) return "NOT VERIFIED";
+    return "Not Checked";
+  };
+
+  const stamp = checkedAt.toLocaleString();
+  if (res.success) {
+    return [
+      "✓ Google Sheets Connected",
+      "",
+      `Authentication: ${label(checks.authentication)}`,
+      `Spreadsheet Access: ${label(checks.spreadsheetAccess)}`,
+      `Sheet/Tab: ${sheetLabel(checks.sheetAccess)}`,
+      `Read Access: ${accessLabel(checks.readAccess, "read")}`,
+      `Write Access: ${accessLabel(checks.writeAccess, "write")}`,
+      "",
+      `Last checked: ${stamp}`,
+    ].join("\n");
+  }
+
+  const reason =
+    res.reason ||
+    res.message ||
+    "Please verify your credentials and configuration.";
+  return [
+    "✕ Google Sheets Connection Failed",
+    "",
+    `Authentication: ${label(checks.authentication)}`,
+    `Spreadsheet Access: ${label(checks.spreadsheetAccess)}`,
+    `Sheet/Tab: ${sheetLabel(checks.sheetAccess)}`,
+    `Read Access: ${accessLabel(checks.readAccess, "read")}`,
+    `Write Access: ${accessLabel(checks.writeAccess, "write")}`,
+    "",
+    "Reason:",
+    reason,
+    "",
+    `Last checked: ${stamp}`,
+  ].join("\n");
+}
+
 export function displayName(row: Pick<AdminEnvRow, "first_name" | "last_name" | "email">): string {
   const name = `${row.first_name || ""} ${row.last_name || ""}`.trim();
   return name || row.email;
 }
 
 export const WHATSAPP_FIELD_LABELS: Partial<Record<keyof WhatsAppEnv, string>> = {
-  app_id: "App ID",
-  access_token: "Access token",
-  phone_number_id: "Phone number ID",
-  business_account_id: "WhatsApp Business Account ID",
-  business_phone: "Display phone number",
-  graph_api_version: "Graph API version",
-  app_secret: "App secret",
-  verify_token: "Webhook verify token",
-  template_name: "Message template name",
-  template_language_code: "Template language",
+  app_id: "WHATSAPP_APP_ID",
+  access_token: "WHATSAPP_ACCESS_TOKEN",
+  graph_api_version: "WHATSAPP_GRAPH_API_VERSION",
+  phone_number_id: "WHATSAPP_PHONE_NUMBER_ID",
+  business_phone: "WHATSAPP_BUSINESS_PHONE",
+  business_account_id: "WHATSAPP_BUSINESS_ACCOUNT_ID",
+  app_secret: "WHATSAPP_APP_SECRET",
+  verify_token: "WHATSAPP_VERIFY_TOKEN",
+  template_language_code: "WHATSAPP_TEMPLATE_LANGUAGE_CODE",
+  business_card_template_name: "WHATSAPP_BUSINESS_CARD_TEMPLATE_NAME",
+  card_received_template_name: "WHATSAPP_CARD_RECEIVED_TEMPLATE_NAME",
+  scan_template_name: "WHATSAPP_SCAN_TEMPLATE_NAME",
 };
 
 export const EMAIL_FIELD_LABELS: Partial<Record<keyof EmailEnv, string>> = {
@@ -506,13 +874,13 @@ export const EMAIL_FIELD_LABELS: Partial<Record<keyof EmailEnv, string>> = {
   smtp_user: "SMTP_USER",
   smtp_password: "SMTP_PASSWORD",
   smtp_from: "SMTP_FROM",
+  sender_notification_email: "SENDER_NOTIFICATION_EMAIL",
 };
 
 export const GOOGLE_SHEETS_FIELD_LABELS: Partial<Record<keyof GoogleSheetsEnv, string>> = {
   google_sheet_id: "Google Sheet ID",
   google_sheet_name: "Google Sheet Name",
   google_service_account_json: "Google Service Account JSON",
-  google_drive_folder_id: "Google Root Folder ID",
   google_oauth_client_id: "Google OAuth Client ID",
   google_oauth_client_secret: "Google OAuth Client Secret",
   google_oauth_redirect_uri: "Google OAuth Redirect URI",
@@ -521,14 +889,16 @@ export const GOOGLE_SHEETS_FIELD_LABELS: Partial<Record<keyof GoogleSheetsEnv, s
 export const WHATSAPP_INPUT_KEYS: (keyof WhatsAppEnv)[] = [
   "app_id",
   "access_token",
-  "phone_number_id",
-  "business_account_id",
-  "business_phone",
   "graph_api_version",
+  "phone_number_id",
+  "business_phone",
+  "business_account_id",
   "app_secret",
   "verify_token",
-  "template_name",
   "template_language_code",
+  "business_card_template_name",
+  "card_received_template_name",
+  "scan_template_name",
 ];
 
 export const EMAIL_INPUT_KEYS: (keyof EmailEnv)[] = [
@@ -537,13 +907,13 @@ export const EMAIL_INPUT_KEYS: (keyof EmailEnv)[] = [
   "smtp_user",
   "smtp_password",
   "smtp_from",
+  "sender_notification_email",
 ];
 
 export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
   "google_sheet_id",
   "google_sheet_name",
   "google_service_account_json",
-  "google_drive_folder_id",
   "google_oauth_client_id",
   "google_oauth_client_secret",
   "google_oauth_redirect_uri",

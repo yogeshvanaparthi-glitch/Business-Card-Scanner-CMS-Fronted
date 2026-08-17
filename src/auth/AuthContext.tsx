@@ -10,6 +10,7 @@ import {
 import {
   clearSession,
   getAccessToken,
+  getRefreshToken,
   loadStoredUser,
   login as apiLogin,
   logout as apiLogout,
@@ -35,7 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = loadStoredUser();
     const token = getAccessToken();
-    if (stored && token) setUser(stored);
+    const refresh = getRefreshToken();
+    if (stored && (token || refresh)) {
+      setUser(stored);
+    } else {
+      clearSession();
+      setUser(null);
+    }
     setIsLoading(false);
   }, []);
 
@@ -58,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       user,
-      isAuthenticated: Boolean(user && getAccessToken()),
+      isAuthenticated: Boolean(user && (getAccessToken() || getRefreshToken())),
       isLoading,
       login,
       logout,

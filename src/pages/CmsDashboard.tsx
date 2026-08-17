@@ -1,3 +1,5 @@
+import { WhatsAppSetupPanel } from "@/components/WhatsAppSetupPanel";
+import { EnvironmentOverviewPanel } from "@/components/EnvironmentOverviewPanel";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
@@ -9,6 +11,7 @@ import {
   EMAIL_INPUT_KEYS,
   fetchAdminEnvList,
   fetchEmailShell,
+  formatGoogleSheetsHealthMessage,
   GOOGLE_SHEETS_FIELD_LABELS,
   GOOGLE_SHEETS_INPUT_KEYS,
   previewValueForToken,
@@ -27,6 +30,7 @@ import {
   type AdminEnvRow,
   type EmailEnv,
   type GoogleSheetsEnv,
+  type GoogleSheetsHealthResult,
   type TemplateEnv,
   type WhatsAppEnv,
   type WhatsAppHeaderFormat,
@@ -63,9 +67,10 @@ export function CmsDashboard() {
 
   const removeEnv = async (admin: AdminEnvRow) => {
     const name = displayName(admin);
+    const clientLabel = admin.company_name || name;
     if (
       !window.confirm(
-        `Remove all CMS WhatsApp, Email, and template settings for ${name}?\n\nThey will fall back to the server .env until you save again.`,
+        `Remove all CMS WhatsApp, Email, Google Sheets, and template settings for ${clientLabel}?\n\nThis tenant will not fall back to another client's credentials. Channels stay off until you save again.`,
       )
     ) {
       return;
@@ -75,7 +80,7 @@ export function CmsDashboard() {
       setAdmins((prev) => prev.map((a) => (a.admin_id === next.admin_id ? next : a)));
       setMessage({
         type: "ok",
-        text: `Removed CMS environment for ${name}. Using global .env.`,
+        text: `Removed CMS environment for ${clientLabel}. Tenant channels are off until reconfigured.`,
       });
     } catch (err) {
       setMessage({
@@ -110,8 +115,22 @@ export function CmsDashboard() {
             NameCardScan CMS
           </p>
           <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">
-            Admin environment
+            Multi-client environment
           </h1>
+          {selected ? (
+            <p className="mt-0.5 truncate text-sm text-[var(--muted)]">
+              Active client:{" "}
+              <span className="font-medium text-[var(--ink)]">
+                {selected.company_name || displayName(selected)}
+              </span>
+              <span className="text-[var(--muted)]">
+                {" "}
+                · Tenant ID: {selected.tenant_id.slice(0, 8)}…
+              </span>
+            </p>
+          ) : (
+            <p className="mt-0.5 text-sm text-[var(--muted)]">Select a client to edit its settings</p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span className="hidden text-sm text-[var(--muted)] md:inline">{user.email}</span>
@@ -134,7 +153,7 @@ export function CmsDashboard() {
 
       {message ? (
         <div
-          className={`w-full border-b px-4 py-2.5 text-sm sm:px-6 lg:px-8 ${
+          className={`w-full whitespace-pre-line border-b px-4 py-2.5 text-sm sm:px-6 lg:px-8 ${
             message.type === "ok"
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-red-200 bg-red-50 text-[var(--danger)]"
@@ -149,22 +168,24 @@ export function CmsDashboard() {
         <aside className="w-full shrink-0 border-b border-[var(--line)] bg-[var(--surface)] lg:w-80 lg:border-b-0 lg:border-r xl:w-96">
           <div className="border-b border-[var(--line)] px-4 py-3 sm:px-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-              Admins
+              Clients
             </p>
             <p className="mt-0.5 text-sm text-[var(--muted)]">
-              {loading ? "Loading…" : `${admins.length} account${admins.length === 1 ? "" : "s"}`}
+              {loading
+                ? "Loading…"
+                : `${admins.length} client${admins.length === 1 ? "" : "s"}`}
             </p>
           </div>
 
           <div className="max-h-[40vh] overflow-y-auto lg:max-h-[calc(100vh-7.5rem)]">
             {loading ? (
-              <p className="px-4 py-8 text-sm text-[var(--muted)]">Loading admins…</p>
+              <p className="px-4 py-8 text-sm text-[var(--muted)]">Loading clients…</p>
             ) : admins.length === 0 ? (
               <div className="px-4 py-8 text-sm text-[var(--muted)] sm:px-5">
-                <p className="font-medium text-[var(--ink)]">No Admins yet</p>
+                <p className="font-medium text-[var(--ink)]">No clients yet</p>
                 <p className="mt-2 leading-relaxed">
-                  Create an Admin in the main app (Manage Team). After they accept the invite,
-                  refresh here to configure their WhatsApp and Email env.
+                  Create an Admin (client) in the main app (Manage Team). After they accept the
+                  invite, refresh here to configure their WhatsApp, Email, and Google Sheets.
                 </p>
               </div>
             ) : (
@@ -182,35 +203,63 @@ export function CmsDashboard() {
                       >
                         <button
                           type="button"
-                          onClick={() => setSelectedId(admin.admin_id)}
-                          className="min-w-0 flex-1 px-4 py-3.5 text-left sm:px-5"
+                          onClick={() => {
+                            setMessage(null);
+                            setSelectedId(admin.admin_id);
+                          }}
+                          className="min-w-0 flex-1 px-4 py-3 text-left sm:px-5"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="font-semibold text-[var(--ink)]">
-                              {displayName(admin)}
-                            </span>
-                            <StatusDot
-                              ok={admin.is_active}
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`h-2 w-2 shrink-0 rounded-full ${
+                                admin.is_active ? "bg-emerald-500" : "bg-slate-300"
+                              }`}
                               title={admin.is_active ? "Active" : "Inactive"}
                             />
+                            <p className="truncate text-sm font-semibold text-[var(--ink)]">
+                              {admin.company_name || displayName(admin)}
+                            </p>
                           </div>
-                          <p className="mt-0.5 truncate text-sm text-[var(--muted)]">
-                            {admin.email}
+                          <p className="mt-0.5 truncate text-xs text-[var(--muted)]">
+                            {admin.company_name ? displayName(admin) : admin.email}
                           </p>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
+                          <p className="mt-1 truncate font-mono text-[10px] text-[var(--muted)]">
+                            Tenant: {admin.tenant_id}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
                             {admin.company_name ? (
-                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
                                 {admin.company_name}
                               </span>
                             ) : null}
                             <span
-                              className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
                                 admin.has_settings
-                                  ? "bg-teal-100 text-teal-800"
+                                  ? "bg-emerald-50 text-emerald-700"
                                   : "bg-amber-50 text-amber-800"
                               }`}
                             >
                               {admin.has_settings ? "Env saved" : "Env empty"}
+                            </span>
+                            {admin.has_settings ? (
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  admin.sync_status === "connected"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : admin.sync_status === "failed"
+                                      ? "bg-red-50 text-red-700"
+                                      : "bg-slate-100 text-slate-600"
+                                }`}
+                              >
+                                {admin.sync_status === "connected"
+                                  ? "Connected"
+                                  : admin.sync_status === "failed"
+                                    ? "Not connected"
+                                    : `v${admin.config_version || 1}`}
+                              </span>
+                            ) : null}
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                              {admin.is_active ? "Active" : "Inactive"}
                             </span>
                           </div>
                         </button>
@@ -274,17 +323,6 @@ export function CmsDashboard() {
   );
 }
 
-function StatusDot({ ok, title }: { ok: boolean; title: string }) {
-  return (
-    <span
-      title={title}
-      className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${
-        ok ? "bg-emerald-500" : "bg-slate-300"
-      }`}
-    />
-  );
-}
-
 function AdminEnvEditor({
   admin,
   onSaved,
@@ -307,16 +345,23 @@ function AdminEnvEditor({
   const [testing, setTesting] = useState(false);
   const [testPhone, setTestPhone] = useState("");
   const [testEmailAddr, setTestEmailAddr] = useState("");
-  const [section, setSection] = useState<"whatsapp" | "email" | "templates" | "google">("templates");
+  const [section, setSection] = useState<
+    "overview" | "whatsapp" | "email" | "templates" | "google"
+  >("overview");
+  const [sheetsHealth, setSheetsHealth] = useState<{
+    result: GoogleSheetsHealthResult;
+    checkedAt: Date;
+  } | null>(null);
 
   useEffect(() => {
     setWhatsapp(admin.whatsapp);
     setEmailEnv(admin.emailEnv);
     setGoogleSheets(admin.googleSheets);
     setTemplates(admin.templates);
-    setSection("templates");
+    setSection("overview");
     setTestPhone(admin.phone || "");
     setTestEmailAddr("");
+    setSheetsHealth(null);
   }, [admin]);
 
   const save = async () => {
@@ -362,16 +407,20 @@ function AdminEnvEditor({
     }
     setTesting(true);
     try {
-      const res = await testAdminWhatsApp(admin.admin_id, {
-        contact_phone: testPhone.trim(),
-        whatsapp,
-        templates,
-      });
+      const res = await testAdminWhatsApp(admin.admin_id, testPhone.trim(), whatsapp);
       onOk(
-        `WhatsApp test sent to ${res.to || testPhone}${res.template ? ` · ${res.template}` : ""}${res.message_id ? ` · id ${res.message_id}` : ""}`,
+        res.message ||
+          `WhatsApp message sent successfully to ${res.to || testPhone}${
+            res.message_id ? ` · id ${res.message_id}` : ""
+          }`,
       );
     } catch (err) {
-      onError(err instanceof Error ? err.message : "WhatsApp test failed");
+      const raw = err instanceof Error ? err.message : "WhatsApp test failed";
+      if (/failed to fetch|cannot reach the api server|networkerror|load failed|err_connection/i.test(raw)) {
+        onError("Unable to connect to WhatsApp service.");
+        return;
+      }
+      onError(raw);
     } finally {
       setTesting(false);
     }
@@ -400,12 +449,30 @@ function AdminEnvEditor({
   };
 
   const runGoogleSheetsTest = async () => {
+    if (testing) return;
     setTesting(true);
     try {
       const res = await testAdminGoogleSheets(admin.admin_id, { googleSheets });
-      onOk(res.message || "Google Sheets connection successful.");
+      const checkedAt = new Date();
+      setSheetsHealth({ result: res, checkedAt });
+      const detail = formatGoogleSheetsHealthMessage(res, checkedAt);
+      if (res.success) {
+        onOk(detail);
+      } else {
+        onError(detail);
+      }
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Google Sheets connection failed");
+      const raw = err instanceof Error ? err.message : "";
+      const failed: GoogleSheetsHealthResult = {
+        success: false,
+        status: "failed",
+        message: "Google Sheets connection failed.",
+        reason:
+          raw || "Unable to reach Google Sheets API. Please try again.",
+      };
+      const checkedAt = new Date();
+      setSheetsHealth({ result: failed, checkedAt });
+      onError(formatGoogleSheetsHealthMessage(failed, checkedAt));
     } finally {
       setTesting(false);
     }
@@ -415,11 +482,18 @@ function AdminEnvEditor({
     <div className="flex h-full w-full flex-col">
       <div className="flex w-full flex-col gap-3 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
         <div className="min-w-0">
-          <h2 className="truncate text-xl font-semibold tracking-tight">{displayName(admin)}</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--brand-ink)]">
+            Active client
+          </p>
+          <h2 className="truncate text-xl font-semibold tracking-tight">
+            {admin.company_name || displayName(admin)}
+          </h2>
           <p className="mt-1 truncate text-sm text-[var(--muted)]">
-            {admin.email}
-            {admin.company_name ? ` · ${admin.company_name}` : ""}
+            {displayName(admin)} · {admin.email}
             {admin.phone ? ` · ${admin.phone}` : ""}
+          </p>
+          <p className="mt-1 font-mono text-xs text-[var(--muted)]">
+            Tenant ID: {admin.tenant_id}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -437,7 +511,7 @@ function AdminEnvEditor({
             onClick={() => void save()}
             className="rounded-md bg-[var(--brand)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--brand-ink)] disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? "Saving…" : "Save Environment"}
           </button>
         </div>
       </div>
@@ -446,6 +520,7 @@ function AdminEnvEditor({
         <div className="flex gap-1 overflow-x-auto">
           {(
             [
+              ["overview", "Environment"],
               ["templates", "Templates & preview"],
               ["whatsapp", "WhatsApp env"],
               ["email", "Email env"],
@@ -472,23 +547,37 @@ function AdminEnvEditor({
       </div>
 
       <div className="w-full flex-1 overflow-y-auto">
-        {section === "templates" ? (
+        {section === "overview" ? (
+          <EnvironmentOverviewPanel
+            admin={admin}
+            onRefreshAdmin={onSaved}
+            onOk={onOk}
+            onError={onError}
+          />
+        ) : section === "templates" ? (
           <TemplatesWorkspace
             templates={templates}
             onChange={setTemplates}
           />
         ) : section === "whatsapp" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
+            <WhatsAppSetupPanel
+              adminId={admin.admin_id}
+              whatsapp={whatsapp}
+              onError={onError}
+              onOk={onOk}
+            />
             <FormSection
               title="WhatsApp Cloud API (Meta)"
               enabled={whatsapp.enabled}
               onEnabledChange={(enabled) => setWhatsapp((w) => ({ ...w, enabled }))}
             >
               <p className="mb-4 text-sm text-[var(--muted)]">
-                Same values as Meta Developer → WhatsApp → API setup / Message templates. Use the
-                exact approved template name and language code from Meta (for your account that is
-                usually <strong>card_final_ula</strong> and <strong>en</strong> — not en_US). Wrong
-                name/language returns Meta error #132001.
+                Same keys as <code className="text-[var(--ink)]">BusinessCardScanner_Backend/.env</code>.
+                Secrets stay masked after save. Use <strong>Check status</strong> above before opening Meta.
+                Test WhatsApp uses CMS template fields (
+                <code className="text-[var(--ink)]">card_received_template_name</code>, etc.) then server env
+                fallback.
               </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
@@ -533,10 +622,17 @@ function AdminEnvEditor({
                     key={key}
                     label={EMAIL_FIELD_LABELS[key] || key}
                     secret={SECRET_EMAIL.has(key)}
+                    placeholder={
+                      key === "sender_notification_email"
+                        ? "Enter sender notification email"
+                        : undefined
+                    }
                     hint={
                       key === "smtp_password" && emailEnv.smtp_password_set
                         ? "Saved — leave blank to keep"
-                        : undefined
+                        : key === "sender_notification_email"
+                          ? "Optional. Receives receiver/contact details after a successful send."
+                          : undefined
                     }
                     value={String(emailEnv[key] ?? "")}
                     onChange={(v) => setEmailEnv((em) => ({ ...em, [key]: v }))}
@@ -567,8 +663,7 @@ function AdminEnvEditor({
                 account JSON and OAuth client secret are masked after save — leave blank to keep
                 existing values. Maps to{" "}
                 <code className="text-[var(--ink)]">GOOGLE_SHEET_*</code> /{" "}
-                <code className="text-[var(--ink)]">GOOGLE_OAUTH_*</code> /{" "}
-                <code className="text-[var(--ink)]">GOOGLE_DRIVE_FOLDER_ID</code>.
+                <code className="text-[var(--ink)]">GOOGLE_OAUTH_*</code>.
               </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {GOOGLE_SHEETS_INPUT_KEYS.map((key) => (
@@ -589,9 +684,7 @@ function AdminEnvEditor({
                         : key === "google_oauth_client_secret" &&
                             googleSheets.google_oauth_client_secret_set
                           ? "Saved — leave blank to keep"
-                          : key === "google_drive_folder_id"
-                            ? "Optional Drive folder (GOOGLE_DRIVE_FOLDER_ID)"
-                            : undefined
+                          : undefined
                     }
                     value={String(googleSheets[key] ?? "")}
                     onChange={(v) => setGoogleSheets((g) => ({ ...g, [key]: v }))}
@@ -605,9 +698,15 @@ function AdminEnvEditor({
                   onClick={() => void runGoogleSheetsTest()}
                   className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
                 >
-                  {testing ? "Testing…" : "Test Connection"}
+                  {testing ? "Checking Connection…" : "Check Connection"}
                 </button>
               </div>
+              {sheetsHealth ? (
+                <GoogleSheetsHealthPanel
+                  result={sheetsHealth.result}
+                  checkedAt={sheetsHealth.checkedAt}
+                />
+              ) : null}
             </FormSection>
           </div>
         )}
@@ -677,8 +776,8 @@ function TemplatesWorkspace({
             <p className="text-sm font-medium">WhatsApp message template</p>
             <p className="mt-0.5 text-xs text-[var(--muted)]">
               Same structure as Meta Developer: Header (None / Text / Photo / Video / Brochure),
-              Body, Footer, optional URL button. Template name &amp; language are under WhatsApp
-              env. Header media URL must be publicly reachable (Meta downloads it).
+              Body, Footer, optional URL button. Template name and language for production sends
+              are configured in the backend environment, not in this CMS form. Header media URL must be publicly reachable (Meta downloads it).
             </p>
           </div>
 
@@ -1009,6 +1108,100 @@ function TokenMapEditor({
   );
 }
 
+function googleSheetsCheckLabel(
+  value: boolean | null | undefined,
+  kind: "auth" | "sheet" | "access" | "write",
+  success: boolean,
+): string {
+  if (kind === "sheet") {
+    if (value === true) return "Found";
+    if (value === false) return "Not Found";
+    return "Not Checked";
+  }
+  if (kind === "access" || kind === "write") {
+    if (value === true) return "Working";
+    if (value === false) return "Failed";
+    if (kind === "write" && success) return "NOT VERIFIED";
+    return "Not Checked";
+  }
+  if (value === true) return "Connected";
+  if (value === false) return "Failed";
+  return "Not Checked";
+}
+
+function GoogleSheetsHealthPanel({
+  result,
+  checkedAt,
+}: {
+  result: GoogleSheetsHealthResult;
+  checkedAt: Date;
+}) {
+  const checks = result.checks || {};
+  const ok = Boolean(result.success);
+  const rows: { label: string; value: string }[] = [
+    {
+      label: "Authentication",
+      value: googleSheetsCheckLabel(checks.authentication, "auth", ok),
+    },
+    {
+      label: "Spreadsheet Access",
+      value: googleSheetsCheckLabel(checks.spreadsheetAccess, "auth", ok),
+    },
+    {
+      label: "Sheet/Tab",
+      value: googleSheetsCheckLabel(checks.sheetAccess, "sheet", ok),
+    },
+    {
+      label: "Read Access",
+      value: googleSheetsCheckLabel(checks.readAccess, "access", ok),
+    },
+    {
+      label: "Write Access",
+      value: googleSheetsCheckLabel(checks.writeAccess, "write", ok),
+    },
+  ];
+
+  return (
+    <div
+      className={`mt-4 rounded-md border px-4 py-3 text-sm ${
+        ok
+          ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+          : "border-red-200 bg-red-50 text-[var(--danger)]"
+      }`}
+    >
+      <p className="font-semibold">
+        {ok ? "✓ Google Sheets Connected" : "✕ Google Sheets Connection Failed"}
+      </p>
+      {result.spreadsheetName || result.sheet_title ? (
+        <p className="mt-1 text-xs opacity-80">
+          Spreadsheet: {result.spreadsheetName || result.sheet_title}
+        </p>
+      ) : null}
+      <ul className="mt-3 space-y-1">
+        {rows.map((row) => (
+          <li key={row.label} className="flex flex-wrap gap-x-2">
+            <span className="font-medium">{row.label}:</span>
+            <span>{row.value}</span>
+          </li>
+        ))}
+      </ul>
+      {!ok ? (
+        <div className="mt-3 whitespace-pre-line text-sm">
+          <p className="font-medium">Reason:</p>
+          <p>
+            {result.reason ||
+              result.message ||
+              "Please verify your credentials and configuration."}
+          </p>
+        </div>
+      ) : null}
+      <p className="mt-3 text-xs opacity-80">
+        Last checked: {checkedAt.toLocaleString()}
+      </p>
+    </div>
+  );
+}
+
 function TestSendBar({
   label,
   placeholder,
@@ -1099,6 +1292,7 @@ function Field({
   secret,
   hint,
   multiline,
+  placeholder,
   className,
 }: {
   label: string;
@@ -1107,9 +1301,13 @@ function Field({
   secret?: boolean;
   hint?: string;
   multiline?: boolean;
+  placeholder?: string;
   className?: string;
 }) {
   const displayValue = value === "••••••••" ? "" : value;
+  const inputPlaceholder =
+    placeholder ||
+    (secret ? (multiline ? "Paste new JSON to update" : "Enter new value to update") : `Enter ${label.toLowerCase()}`);
   return (
     <label className={`block w-full text-sm ${className || ""}`}>
       <span className="mb-1.5 block font-medium text-[var(--ink)]">{label}</span>
@@ -1117,7 +1315,7 @@ function Field({
         <textarea
           className="min-h-28 w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 font-mono text-xs text-[var(--ink)] shadow-sm placeholder:text-slate-400 focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
           value={displayValue}
-          placeholder={secret ? "Paste new JSON to update" : `Enter ${label.toLowerCase()}`}
+          placeholder={inputPlaceholder}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="off"
           spellCheck={false}
@@ -1127,7 +1325,7 @@ function Field({
           type={secret ? "password" : "text"}
           className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-[var(--ink)] shadow-sm placeholder:text-slate-400 focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
           value={displayValue}
-          placeholder={secret ? "Enter new value to update" : `Enter ${label.toLowerCase()}`}
+          placeholder={inputPlaceholder}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="off"
         />

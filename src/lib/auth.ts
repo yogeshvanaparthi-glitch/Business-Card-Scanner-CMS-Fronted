@@ -128,7 +128,14 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   }
 
   let token = getAccessToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (!token) {
+    token = await refreshAccessToken();
+  }
+  if (!token) {
+    clearSession();
+    throw new Error("Your session expired. Please log in again.");
+  }
+  headers.set("Authorization", `Bearer ${token}`);
 
   let res = await fetch(`${API_BASE}${path}`, { ...init, headers });
 
@@ -137,6 +144,9 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
       res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    } else {
+      clearSession();
+      throw new Error("Your session expired. Please log in again.");
     }
   }
 
@@ -144,11 +154,39 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
 }
 
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await apiFetch(path, init);
+  let res: Response;
+  try {
+    res = await apiFetch(path, init);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/failed to fetch|networkerror|load failed|err_connection/i.test(msg)) {
+      throw new Error(
+        "Cannot reach the API server. Ensure the backend is running (port 5000) and the CMS dev server is up, then try again.",
+      );
+    }
+    throw err instanceof Error ? err : new Error(msg);
+  }
+
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const detail = body?.detail?.message ?? body?.detail ?? `Request failed (${res.status})`;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    const body = await res.json().catch(() => ({} as Record<string, unknown>));
+    const detail = body?.detail ?? body?.message ?? `Request failed (${res.status})`;
+    let message: string;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (detail && typeof detail === "object" && "message" in (detail as object)) {
+      message = String((detail as { message?: unknown }).message ?? JSON.stringify(detail));
+    } else if (Array.isArray(detail)) {
+      message = detail
+        .map((item) =>
+          typeof item === "object" && item && "msg" in item
+            ? String((item as { msg: unknown }).msg)
+            : JSON.stringify(item),
+        )
+        .join("; ");
+    } else {
+      message = JSON.stringify(detail);
+    }
+    throw new Error(message || `Request failed (${res.status})`);
   }
   return res.json() as Promise<T>;
 }

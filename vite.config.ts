@@ -16,6 +16,8 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       port: 5174,
+      // Backend CORS / OAuth redirect URIs are bound to this exact origin.
+      strictPort: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
         "/health": { target: apiTarget, changeOrigin: true },

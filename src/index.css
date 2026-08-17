@@ -10,8 +10,6 @@
   --brand-ink: #0f766e;
   --brand-soft: #ccfbf1;
   --danger: #dc2626;
-  --sidebar: #0f1720;
-  --sidebar-muted: #94a3b8;
   font-family: "DM Sans", "Segoe UI", system-ui, sans-serif;
   color: var(--ink);
   background: var(--bg);
