@@ -140,7 +140,10 @@ export type TestUserRow = {
   role: string;
   status: string;
   is_active?: boolean;
+  connected?: boolean;
+  scans_unlimited?: boolean;
   check_status?: string;
+  last_login?: string | null;
   last_test?: string | null;
   reason?: string | null;
   created_at?: string | null;
@@ -150,6 +153,9 @@ export type TestUsersSummary = {
   admin_id: string;
   tenant_id?: string;
   company_name?: string;
+  total?: number;
+  active?: number;
+  connected?: number;
   configured: number;
   created: number;
   available: number;
@@ -543,8 +549,8 @@ export async function saveAdminEnv(
     {
       method: "PUT",
       body: JSON.stringify({
-        whatsapp: { ...payload.whatsapp, enabled: Boolean(payload.whatsapp.enabled) },
-        email: { ...payload.email, enabled: Boolean(payload.email.enabled) },
+        whatsapp: { ...payload.whatsapp, enabled: false },
+        email: { ...payload.email, enabled: false },
         templates: payload.templates,
         google_sheets: {
           ...payload.googleSheets,
@@ -563,6 +569,12 @@ export async function removeAdminEnv(adminId: string): Promise<AdminEnvRow> {
     { method: "DELETE" },
   );
   return normalizeAdminEnvItem(res.item);
+}
+
+export async function removeCmsClient(adminId: string): Promise<void> {
+  await apiJson<{ success: boolean }>(`/api/cms/clients/${adminId}`, {
+    method: "DELETE",
+  });
 }
 
 export type WhatsAppCheckStatus = "ok" | "warn" | "error" | "skip";
@@ -692,6 +704,22 @@ export async function fetchAdminTestUsers(adminId: string): Promise<TestUsersSum
   return apiJson(`/api/cms/admin-env/${adminId}/test-users`);
 }
 
+export async function setTenantUserScansUnlimited(
+  adminId: string,
+  userId: string,
+  scansUnlimited: boolean,
+): Promise<{
+  success: boolean;
+  scans_unlimited: boolean;
+  user?: TestUserRow;
+  users: TestUsersSummary;
+}> {
+  return apiJson(`/api/cms/admin-env/${adminId}/users/${userId}/scans-unlimited`, {
+    method: "PATCH",
+    body: JSON.stringify({ scans_unlimited: scansUnlimited }),
+  });
+}
+
 export async function saveAdminTestUsersLimit(
   adminId: string,
   limit: number,
@@ -720,6 +748,9 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
   };
   const integrations = res.integrations || {};
   const integLines = Object.entries(integrations).map(([key, val]) => {
+    if (/^(whatsapp|email)$/i.test(key) || /whatsapp|smtp/i.test(key)) {
+      return `${key}: 🔒 locked`;
+    }
     const status = String(val?.status || "disabled");
     const mark =
       status === "pass"
@@ -743,6 +774,7 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
       `Project Version: ${res.versions?.project ?? "—"}`,
       "Environment Health: ✓ Healthy",
       "",
+      "Channel access: Google Sheets only (WhatsApp and Email locked)",
       ...integLines,
       "",
       "Environment data is stored in CMS and successfully connected to the project environment.",
