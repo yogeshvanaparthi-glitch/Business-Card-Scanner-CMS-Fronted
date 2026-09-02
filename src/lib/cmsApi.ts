@@ -92,6 +92,16 @@ export type AdminEnvRow = {
   last_health?: Record<string, unknown> | null;
   test_users_limit?: number;
   environment?: EnvironmentMeta;
+  /** CMS kill-switches: true = channel OFF for that company in the main app. */
+  channel_locks: ChannelLocks;
+  /** Inbox that receives scanned-contact details copy for this Admin's company. */
+  receive_email: string;
+};
+
+export type ChannelLocks = {
+  whatsapp: boolean;
+  email: boolean;
+  google_sheets: boolean;
 };
 
 export type EnvironmentMeta = {
@@ -481,6 +491,10 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     raw.environment && typeof raw.environment === "object"
       ? (raw.environment as Record<string, unknown>)
       : null;
+  const locksRaw =
+    raw.channel_locks && typeof raw.channel_locks === "object"
+      ? (raw.channel_locks as Record<string, unknown>)
+      : {};
   return {
     admin_id: adminId,
     tenant_id: String(raw.tenant_id ?? companyId ?? adminId),
@@ -498,6 +512,21 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     emailEnv: asEmail(raw.email_settings),
     googleSheets: asGoogleSheets(raw.google_sheets),
     templates: asTemplates(raw.templates),
+    channel_locks: {
+      whatsapp: locksRaw.whatsapp === undefined ? true : Boolean(locksRaw.whatsapp),
+      email: locksRaw.email === undefined ? false : Boolean(locksRaw.email),
+      google_sheets:
+        locksRaw.google_sheets === undefined ? false : Boolean(locksRaw.google_sheets),
+    },
+    receive_email: String(
+      raw.receive_email ||
+        (raw.email_settings && typeof raw.email_settings === "object"
+          ? String(
+              (raw.email_settings as Record<string, unknown>).sender_notification_email || "",
+            )
+          : "") ||
+        "",
+    ),
     settings_updated_at: raw.settings_updated_at ? String(raw.settings_updated_at) : null,
     config_version: Number(raw.config_version ?? 0) || 0,
     project_config_version:
@@ -562,6 +591,40 @@ export async function saveAdminEnv(
         google_sheets: {
           ...payload.googleSheets,
           enabled: Boolean(payload.googleSheets.enabled),
+        },
+      }),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminChannelLocks(
+  adminId: string,
+  locks: Partial<ChannelLocks>,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}/channel-locks`,
+    {
+      method: "PUT",
+      body: JSON.stringify(locks),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminReceiveEmail(
+  adminId: string,
+  receiveEmail: string,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        email: {
+          sender_notification_email: receiveEmail.trim(),
+          receive_email: receiveEmail.trim(),
+          enabled: false,
         },
       }),
     },

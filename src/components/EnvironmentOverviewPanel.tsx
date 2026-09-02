@@ -3,10 +3,13 @@ import {
   checkAdminEnvironment,
   fetchAdminTestUsers,
   formatEnvironmentCheckMessage,
+  saveAdminChannelLocks,
+  saveAdminReceiveEmail,
   saveAdminTestUsersLimit,
   setTenantUserScanEntitlement,
   DEFAULT_SCAN_CARD_LIMIT,
   type AdminEnvRow,
+  type ChannelLocks,
   type EnvironmentCheckResult,
   type ScanEntitlementMode,
   type TestUsersSummary,
@@ -57,20 +60,29 @@ export function EnvironmentOverviewPanel({
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [savingPremiumUserId, setSavingPremiumUserId] = useState<string | null>(null);
   const [customLimitDraft, setCustomLimitDraft] = useState<Record<string, string>>({});
+  const [savingLock, setSavingLock] = useState<keyof ChannelLocks | null>(null);
+  const [receiveEmail, setReceiveEmail] = useState(admin.receive_email || "");
+  const [savingReceive, setSavingReceive] = useState(false);
 
   const env = admin.environment;
+  const locks = admin.channel_locks || {
+    whatsapp: true,
+    email: false,
+    google_sheets: false,
+  };
   const cmsVersion = admin.config_version ?? env?.cms_version ?? 0;
   const projectVersion = admin.project_config_version ?? env?.project_version ?? null;
 
   useEffect(() => {
     setTestLimit(String(admin.test_users_limit ?? 0));
+    setReceiveEmail(admin.receive_email || admin.emailEnv?.sender_notification_email || "");
     setEnvResult(null);
     setLoadingUsers(true);
     void fetchAdminTestUsers(admin.admin_id)
       .then(setTestUsers)
       .catch(() => setTestUsers(null))
       .finally(() => setLoadingUsers(false));
-  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at]);
+  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at, admin.receive_email, admin.emailEnv?.sender_notification_email]);
 
   const runEnvCheck = async () => {
     if (checking) return;
@@ -186,6 +198,55 @@ export function EnvironmentOverviewPanel({
     }
   };
 
+  const toggleChannelLock = async (channel: keyof ChannelLocks) => {
+    if (savingLock) return;
+    const nextLocked = !locks[channel];
+    setSavingLock(channel);
+    try {
+      const next = await saveAdminChannelLocks(admin.admin_id, { [channel]: nextLocked });
+      onRefreshAdmin(next);
+      const label =
+        channel === "google_sheets"
+          ? "Google Sheets"
+          : channel === "whatsapp"
+            ? "WhatsApp"
+            : "Email";
+      onOk(
+        nextLocked
+          ? `🔒 ${label} locked — turned off for this company in the app.`
+          : `✓ ${label} unlocked — available again for this company in the app.`,
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to update channel lock");
+    } finally {
+      setSavingLock(null);
+    }
+  };
+
+  const saveReceiveEmail = async () => {
+    if (savingReceive) return;
+    const value = receiveEmail.trim();
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      onError("Enter a valid Receive email address.");
+      return;
+    }
+    setSavingReceive(true);
+    try {
+      const next = await saveAdminReceiveEmail(admin.admin_id, value);
+      setReceiveEmail(next.receive_email || value);
+      onRefreshAdmin(next);
+      onOk(
+        value
+          ? `Receive email saved: ${value}`
+          : "Receive email cleared — fallback hierarchy will be used.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Receive email");
+    } finally {
+      setSavingReceive(false);
+    }
+  };
+
   const integ = envResult?.integrations;
   const lastHealthIntegrations =
     admin.last_health && typeof admin.last_health === "object"
@@ -236,34 +297,131 @@ export function EnvironmentOverviewPanel({
         </div>
 
         <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
-          Per-Admin CMS covers <strong>Google Sheets</strong> and <strong>message templates</strong>.
-          Email SMTP uses the server <code className="text-[var(--ink)]">.env</code> (
-          <code className="text-[var(--ink)]">SMTP_INTERNAL_*</code> /{" "}
-          <code className="text-[var(--ink)]">SMTP_EXTERNAL_*</code>). WhatsApp remains locked.
+          Click <strong>Lock</strong> / <strong>Unlock</strong> on each channel to turn it off or on
+          for this company&apos;s users in the main app. Email SMTP still uses server{" "}
+          <code className="text-[var(--ink)]">.env</code> when unlocked.
         </div>
 
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
-            <dt className="text-emerald-800">Google Sheets</dt>
-            <dd className="mt-1 font-semibold text-emerald-900">
-              Has access
-              <span className="ml-2 font-medium">{sheetsStatusLabel}</span>
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.google_sheets
+                ? "border-amber-200 bg-amber-50"
+                : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <dt className={locks.google_sheets ? "text-amber-800" : "text-emerald-800"}>
+              Google Sheets
+            </dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.google_sheets ? "text-amber-900" : "text-emerald-900"
+              }`}
+            >
+              {locks.google_sheets ? "Locked · No access" : "Has access"}
+              {!locks.google_sheets ? (
+                <span className="ml-2 font-medium">{sheetsStatusLabel}</span>
+              ) : null}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("google_sheets")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {savingLock === "google_sheets"
+                  ? "Saving…"
+                  : locks.google_sheets
+                    ? "Unlock"
+                    : "Lock"}
+              </button>
             </dd>
           </div>
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
-            <dt className="text-amber-800">WhatsApp</dt>
-            <dd className="mt-1 font-semibold text-amber-900">Locked · No access</dd>
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.whatsapp ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <dt className={locks.whatsapp ? "text-amber-800" : "text-emerald-800"}>WhatsApp</dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.whatsapp ? "text-amber-900" : "text-emerald-900"
+              }`}
+            >
+              {locks.whatsapp ? "Locked · No access" : "Unlocked · Available"}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("whatsapp")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {savingLock === "whatsapp" ? "Saving…" : locks.whatsapp ? "Unlock" : "Lock"}
+              </button>
+            </dd>
           </div>
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
-            <dt className="text-slate-700">Email (Amazon SES)</dt>
-            <dd className="mt-1 font-semibold text-slate-900">
-              Server .env
-              <span className="ml-2 text-xs font-normal text-slate-600">
-                INTERNAL + EXTERNAL lanes
-              </span>
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.email ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"
+            }`}
+          >
+            <dt className={locks.email ? "text-amber-800" : "text-slate-700"}>
+              Email (Amazon SES)
+            </dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.email ? "text-amber-900" : "text-slate-900"
+              }`}
+            >
+              {locks.email ? "Locked · No access" : "Unlocked · Server .env"}
+              {!locks.email ? (
+                <span className="ml-2 text-xs font-normal text-slate-600">
+                  INTERNAL + EXTERNAL lanes
+                </span>
+              ) : null}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("email")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {savingLock === "email" ? "Saving…" : locks.email ? "Unlock" : "Lock"}
+              </button>
             </dd>
           </div>
         </dl>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Receive email</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Not hardcoded. Whatever you save here is the inbox that receives scanned contact
+              details for this Admin&apos;s company (Admin + User scans). Super Admin scans still
+              use the Super Admin login / SUPERADMIN_EMAIL default.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="email"
+                value={receiveEmail}
+                onChange={(e) => setReceiveEmail(e.target.value)}
+                placeholder="manager@company.com"
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingReceive}
+                onClick={() => void saveReceiveEmail()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingReceive ? "Saving…" : "Save receive email"}
+              </button>
+            </div>
+          </label>
+        </div>
 
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
           <div className="rounded-md border border-[var(--line)] px-3 py-3">

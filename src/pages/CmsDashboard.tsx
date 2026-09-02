@@ -297,7 +297,28 @@ export function CmsDashboard() {
               admin={selected}
               onSaved={(next) => {
                 setAdmins((prev) =>
-                  prev.map((a) => (a.admin_id === next.admin_id ? next : a)),
+                  prev.map((a) =>
+                    a.admin_id === next.admin_id
+                      ? {
+                          ...a,
+                          ...next,
+                          receive_email:
+                            next.receive_email ||
+                            next.emailEnv?.sender_notification_email ||
+                            a.receive_email ||
+                            "",
+                          emailEnv: {
+                            ...a.emailEnv,
+                            ...next.emailEnv,
+                            sender_notification_email:
+                              next.emailEnv?.sender_notification_email ||
+                              next.receive_email ||
+                              a.emailEnv?.sender_notification_email ||
+                              "",
+                          },
+                        }
+                      : a,
+                  ),
                 );
                 setMessage({
                   type: "ok",
@@ -306,7 +327,18 @@ export function CmsDashboard() {
               }}
               onRemoved={(next) => {
                 setAdmins((prev) =>
-                  prev.map((a) => (a.admin_id === next.admin_id ? next : a)),
+                  prev.map((a) =>
+                    a.admin_id === next.admin_id
+                      ? {
+                          ...a,
+                          ...next,
+                          receive_email:
+                            next.receive_email ||
+                            next.emailEnv?.sender_notification_email ||
+                            "",
+                        }
+                      : a,
+                  ),
                 );
                 setMessage({
                   type: "ok",
@@ -360,7 +392,7 @@ function AdminEnvEditor({
     setTemplates(admin.templates);
     setSection("overview");
     setSheetsHealth(null);
-  }, [admin]);
+  }, [admin.admin_id]);
 
   const save = async () => {
     setSaving(true);
@@ -471,8 +503,14 @@ function AdminEnvEditor({
             [
               ["overview", "Environment"],
               ["templates", "Templates & preview"],
-              ["whatsapp", "WhatsApp 🔒"],
-              ["google", "Google Sheets"],
+              [
+                "whatsapp",
+                admin.channel_locks?.whatsapp !== false ? "WhatsApp 🔒" : "WhatsApp",
+              ],
+              [
+                "google",
+                admin.channel_locks?.google_sheets ? "Google Sheets 🔒" : "Google Sheets",
+              ],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -512,13 +550,13 @@ function AdminEnvEditor({
             <FormSection
               title="WhatsApp Cloud API (Meta)"
               enabled={false}
-              locked
+              locked={admin.channel_locks?.whatsapp !== false}
               onEnabledChange={() => undefined}
             >
               <p className="mb-4 text-sm text-[var(--muted)]">
-                Same keys as <code className="text-[var(--ink)]">BusinessCardScanner_Backend/.env</code>.
-                Live WhatsApp send is frozen for this product stage. Credentials can still be stored
-                for later; Test and Enable stay off.
+                Use <strong>Environment</strong> → WhatsApp <strong>Lock / Unlock</strong> to turn
+                WhatsApp off or on for this company in the main app. Credentials below are optional
+                CMS storage; live send still uses server config when unlocked.
               </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
