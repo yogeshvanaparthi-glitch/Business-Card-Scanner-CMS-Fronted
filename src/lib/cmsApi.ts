@@ -133,6 +133,11 @@ export type EnvironmentCheckResult = {
   };
 };
 
+export type ScanEntitlementMode = "default" | "unlimited" | "custom";
+
+/** Default personal scan cap for every user unless CMS overrides it. */
+export const DEFAULT_SCAN_CARD_LIMIT = 10;
+
 export type TestUserRow = {
   id: string;
   name: string;
@@ -142,6 +147,10 @@ export type TestUserRow = {
   is_active?: boolean;
   connected?: boolean;
   scans_unlimited?: boolean;
+  user_card_limit?: number | null;
+  user_cards_used?: number;
+  effective_card_limit?: number | null;
+  scan_entitlement_mode?: ScanEntitlementMode;
   check_status?: string;
   last_login?: string | null;
   last_test?: string | null;
@@ -717,6 +726,28 @@ export async function setTenantUserScansUnlimited(
   return apiJson(`/api/cms/admin-env/${adminId}/users/${userId}/scans-unlimited`, {
     method: "PATCH",
     body: JSON.stringify({ scans_unlimited: scansUnlimited }),
+  });
+}
+
+export async function setTenantUserScanEntitlement(
+  adminId: string,
+  userId: string,
+  mode: ScanEntitlementMode,
+  limit?: number | null,
+): Promise<{
+  success: boolean;
+  scans_unlimited: boolean;
+  user_card_limit?: number | null;
+  scan_entitlement_mode?: ScanEntitlementMode;
+  user?: TestUserRow;
+  users: TestUsersSummary;
+}> {
+  return apiJson(`/api/cms/admin-env/${adminId}/users/${userId}/scan-entitlement`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      mode,
+      ...(mode === "custom" ? { limit: limit ?? null } : {}),
+    }),
   });
 }
 

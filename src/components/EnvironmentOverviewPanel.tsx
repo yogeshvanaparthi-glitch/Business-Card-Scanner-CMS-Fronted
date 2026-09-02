@@ -4,9 +4,11 @@ import {
   fetchAdminTestUsers,
   formatEnvironmentCheckMessage,
   saveAdminTestUsersLimit,
-  setTenantUserScansUnlimited,
+  setTenantUserScanEntitlement,
+  DEFAULT_SCAN_CARD_LIMIT,
   type AdminEnvRow,
   type EnvironmentCheckResult,
+  type ScanEntitlementMode,
   type TestUsersSummary,
 } from "@/lib/cmsApi";
 
@@ -54,6 +56,7 @@ export function EnvironmentOverviewPanel({
   const [checkingUsers, setCheckingUsers] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [savingPremiumUserId, setSavingPremiumUserId] = useState<string | null>(null);
+  const [customLimitDraft, setCustomLimitDraft] = useState<Record<string, string>>({});
 
   const env = admin.environment;
   const cmsVersion = admin.config_version ?? env?.cms_version ?? 0;
@@ -141,22 +144,45 @@ export function EnvironmentOverviewPanel({
     }
   };
 
-  const togglePremium = async (userId: string, next: boolean) => {
+  const entitlementLabel = (mode?: ScanEntitlementMode, limit?: number | null) => {
+    if (mode === "unlimited") return "Unlimited";
+    if (mode === "custom" && limit != null) return `${limit} cards`;
+    return `${DEFAULT_SCAN_CARD_LIMIT} cards (default)`;
+  };
+
+  const saveScanEntitlement = async (
+    userId: string,
+    mode: ScanEntitlementMode,
+    limit?: number | null,
+  ) => {
     if (savingPremiumUserId) return;
     setSavingPremiumUserId(userId);
     try {
-      const res = await setTenantUserScansUnlimited(admin.admin_id, userId, next);
+      const res = await setTenantUserScanEntitlement(admin.admin_id, userId, mode, limit);
       setTestUsers(res.users);
       const email = res.user?.email || userId;
-      onOk(
-        next
-          ? `Premium enabled for ${email}. Unlimited card scans for this user only.`
-          : `Premium removed for ${email}. Freemium limits apply again.`,
-      );
+      onOk(`Scan limit updated for ${email}: ${entitlementLabel(mode, res.user_card_limit ?? limit ?? null)}.`);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to update premium access");
+      onError(err instanceof Error ? err.message : "Failed to update scan limit");
     } finally {
       setSavingPremiumUserId(null);
+    }
+  };
+
+  const onEntitlementSelect = (userId: string, value: string) => {
+    if (value === "default" || value === "unlimited") {
+      void saveScanEntitlement(userId, value);
+      return;
+    }
+    if (value === "500") {
+      void saveScanEntitlement(userId, "custom", 500);
+      return;
+    }
+    if (value === "custom") {
+      setCustomLimitDraft((prev) => ({
+        ...prev,
+        [userId]: prev[userId] ?? "",
+      }));
     }
   };
 
@@ -448,7 +474,7 @@ export function EnvironmentOverviewPanel({
                 <th className="py-2 pr-4 font-medium">Role</th>
                 <th className="py-2 pr-4 font-medium">Active</th>
                 <th className="py-2 pr-4 font-medium">Connected</th>
-                <th className="py-2 pr-4 font-medium">Premium</th>
+                <th className="py-2 pr-4 font-medium">Scan limit</th>
                 <th className="py-2 font-medium">Last login</th>
               </tr>
             </thead>
@@ -478,22 +504,80 @@ export function EnvironmentOverviewPanel({
                         : "Not connected"}
                     </td>
                     <td className="py-2.5 pr-4">
-                      <label className="inline-flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 rounded border-[var(--line)] text-[var(--brand)] focus:ring-[var(--brand)]/30"
-                          checked={u.scans_unlimited === true}
+                      <div className="flex min-w-[220px] flex-col gap-2">
+                        <select
+                          className="rounded-md border border-[var(--line)] bg-white px-2 py-1.5 text-xs"
                           disabled={savingPremiumUserId === u.id}
-                          onChange={(e) => void togglePremium(u.id, e.target.checked)}
-                        />
-                        <span className="text-xs font-medium">
+                          value={
+                            u.scan_entitlement_mode === "custom" &&
+                            u.user_card_limit != null &&
+                            u.user_card_limit !== 500
+                              ? "custom"
+                              : u.scan_entitlement_mode === "custom" && u.user_card_limit === 500
+                                ? "500"
+                                : u.scan_entitlement_mode || "default"
+                          }
+                          onChange={(e) => onEntitlementSelect(u.id, e.target.value)}
+                        >
+                          <option value="default">{DEFAULT_SCAN_CARD_LIMIT} cards (default)</option>
+                          <option value="unlimited">Unlimited</option>
+                          <option value="500">500 cards</option>
+                          <option value="custom">Custom…</option>
+                        </select>
+                        {(u.scan_entitlement_mode === "custom" &&
+                          u.user_card_limit != null &&
+                          u.user_card_limit !== 500) ||
+                        customLimitDraft[u.id] !== undefined ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              max={100000}
+                              className="w-24 rounded-md border border-[var(--line)] bg-white px-2 py-1 text-xs"
+                              placeholder="Limit"
+                              value={
+                                customLimitDraft[u.id] ??
+                                (u.user_card_limit != null && u.user_card_limit !== 500
+                                  ? String(u.user_card_limit)
+                                  : "")
+                              }
+                              onChange={(e) =>
+                                setCustomLimitDraft((prev) => ({
+                                  ...prev,
+                                  [u.id]: e.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="rounded-md border border-[var(--line)] px-2 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                              disabled={savingPremiumUserId === u.id}
+                              onClick={() => {
+                                const n = Number(customLimitDraft[u.id] ?? u.user_card_limit);
+                                if (!Number.isFinite(n) || n < 1) {
+                                  onError("Enter a custom limit of at least 1.");
+                                  return;
+                                }
+                                void saveScanEntitlement(u.id, "custom", Math.floor(n));
+                                setCustomLimitDraft((prev) => {
+                                  const next = { ...prev };
+                                  delete next[u.id];
+                                  return next;
+                                });
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : null}
+                        <span className="text-[11px] text-[var(--muted)]">
                           {savingPremiumUserId === u.id
                             ? "Saving…"
-                            : u.scans_unlimited
-                              ? "Unlimited"
-                              : "Freemium"}
+                            : u.scan_entitlement_mode === "custom"
+                              ? `${u.user_cards_used ?? 0} / ${u.user_card_limit ?? "—"} used`
+                              : entitlementLabel(u.scan_entitlement_mode, u.user_card_limit ?? null)}
                         </span>
-                      </label>
+                      </div>
                     </td>
                     <td className="py-2.5">{formatWhen(u.last_login || u.last_test)}</td>
                   </tr>
