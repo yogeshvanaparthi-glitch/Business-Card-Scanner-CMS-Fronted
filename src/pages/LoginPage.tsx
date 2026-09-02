@@ -14,6 +14,14 @@ export function LoginPage() {
     return <Navigate to="/" replace />;
   }
 
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] text-sm text-[var(--muted)]">
+        Loading…
+      </div>
+    );
+  }
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");

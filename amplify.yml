@@ -36,6 +36,13 @@ frontend:
         - key: "Cache-Control"
           value: "no-cache, no-store, must-revalidate"
 customRules:
-  - source: "/<*>"
-    target: /index.html
-    status: "404-200"
+  # SPA fallback — required for direct /login URLs and browser refresh on deep links.
+  - source: "/login"
+    target: "/index.html"
+    status: "200"
+  - source: "/login/"
+    target: "/index.html"
+    status: "200"
+  - source: '</^[^.]+$|\.(?!(css|gif|ico|jpg|js|png|txt|svg|woff|woff2|ttf|map|json|webp)$)([^.]+$)/>'
+    target: "/index.html"
+    status: "200"
