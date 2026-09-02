@@ -66,6 +66,21 @@ export type TemplateEnv = {
   token_map: Record<string, string>;
 };
 
+export type ChannelLocks = {
+  whatsapp: boolean;
+  email: boolean;
+  google_sheets: boolean;
+};
+
+export type PaymentSnapshot = {
+  payment_done: boolean;
+  payment_status: string;
+  payment_label: string;
+  plan_name?: string;
+  intent_status?: string | null;
+  package_id?: string | null;
+};
+
 export type AdminEnvRow = {
   admin_id: string;
   /** Tenant key: company_id when present, otherwise admin_id. */
@@ -92,6 +107,8 @@ export type AdminEnvRow = {
   last_health?: Record<string, unknown> | null;
   test_users_limit?: number;
   environment?: EnvironmentMeta;
+  channel_locks: ChannelLocks;
+  payment?: PaymentSnapshot;
 };
 
 export type EnvironmentMeta = {
@@ -140,7 +157,9 @@ export type TestUserRow = {
   role: string;
   status: string;
   is_active?: boolean;
+  connected?: boolean;
   check_status?: string;
+  last_login?: string | null;
   last_test?: string | null;
   reason?: string | null;
   created_at?: string | null;
@@ -150,6 +169,9 @@ export type TestUsersSummary = {
   admin_id: string;
   tenant_id?: string;
   company_name?: string;
+  total?: number;
+  active?: number;
+  connected?: number;
   configured: number;
   created: number;
   available: number;
@@ -459,6 +481,29 @@ export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEn
   return filledShell;
 }
 
+function asChannelLocks(raw: unknown): ChannelLocks {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    whatsapp: Boolean(o.whatsapp),
+    email: Boolean(o.email),
+    google_sheets: Boolean(o.google_sheets),
+  };
+}
+
+function asPayment(raw: unknown): PaymentSnapshot | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const done = Boolean(o.payment_done);
+  return {
+    payment_done: done,
+    payment_status: String(o.payment_status ?? (done ? "done" : "not_done")),
+    payment_label: String(o.payment_label ?? (done ? "payment paid" : "payment not paid")),
+    plan_name: o.plan_name ? String(o.plan_name) : undefined,
+    intent_status: o.intent_status ? String(o.intent_status) : null,
+    package_id: o.package_id ? String(o.package_id) : null,
+  };
+}
+
 export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow {
   const adminId = String(raw.admin_id ?? "");
   const companyId = raw.company_id ? String(raw.company_id) : null;
@@ -516,6 +561,8 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
             : null,
         }
       : undefined,
+    channel_locks: asChannelLocks(raw.channel_locks),
+    payment: asPayment(raw.payment),
   };
 }
 
@@ -543,14 +590,28 @@ export async function saveAdminEnv(
     {
       method: "PUT",
       body: JSON.stringify({
-        whatsapp: { ...payload.whatsapp, enabled: Boolean(payload.whatsapp.enabled) },
-        email: { ...payload.email, enabled: Boolean(payload.email.enabled) },
+        whatsapp: { ...payload.whatsapp, enabled: false },
+        email: { ...payload.email, enabled: false },
         templates: payload.templates,
         google_sheets: {
           ...payload.googleSheets,
           enabled: Boolean(payload.googleSheets.enabled),
         },
       }),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveChannelLocks(
+  adminId: string,
+  locks: Partial<ChannelLocks>,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}/channel-locks`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(locks),
     },
   );
   return normalizeAdminEnvItem(res.item);
@@ -563,6 +624,12 @@ export async function removeAdminEnv(adminId: string): Promise<AdminEnvRow> {
     { method: "DELETE" },
   );
   return normalizeAdminEnvItem(res.item);
+}
+
+export async function removeCmsClient(adminId: string): Promise<void> {
+  await apiJson<{ success: boolean }>(`/api/cms/clients/${adminId}`, {
+    method: "DELETE",
+  });
 }
 
 export type WhatsAppCheckStatus = "ok" | "warn" | "error" | "skip";
@@ -720,6 +787,9 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
   };
   const integrations = res.integrations || {};
   const integLines = Object.entries(integrations).map(([key, val]) => {
+    if (/^(whatsapp|email)$/i.test(key) || /whatsapp|smtp/i.test(key)) {
+      return `${key}: 🔒 locked`;
+    }
     const status = String(val?.status || "disabled");
     const mark =
       status === "pass"
@@ -743,6 +813,7 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
       `Project Version: ${res.versions?.project ?? "—"}`,
       "Environment Health: ✓ Healthy",
       "",
+      "Channel access: Google Sheets only (WhatsApp and Email locked)",
       ...integLines,
       "",
       "Environment data is stored in CMS and successfully connected to the project environment.",

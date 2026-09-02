@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   checkAdminEnvironment,
-  checkAdminTestUsers,
   fetchAdminTestUsers,
   formatEnvironmentCheckMessage,
   saveAdminTestUsersLimit,
+  saveChannelLocks,
   type AdminEnvRow,
+  type ChannelLocks,
   type EnvironmentCheckResult,
-  type TestUsersCheckResult,
   type TestUsersSummary,
 } from "@/lib/cmsApi";
 
@@ -53,8 +53,8 @@ export function EnvironmentOverviewPanel({
   const [testLimit, setTestLimit] = useState(String(admin.test_users_limit ?? 0));
   const [savingLimit, setSavingLimit] = useState(false);
   const [checkingUsers, setCheckingUsers] = useState(false);
-  const [userCheck, setUserCheck] = useState<TestUsersCheckResult | null>(null);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [savingLock, setSavingLock] = useState<keyof ChannelLocks | null>(null);
 
   const env = admin.environment;
   const cmsVersion = admin.config_version ?? env?.cms_version ?? 0;
@@ -63,7 +63,6 @@ export function EnvironmentOverviewPanel({
   useEffect(() => {
     setTestLimit(String(admin.test_users_limit ?? 0));
     setEnvResult(null);
-    setUserCheck(null);
     setLoadingUsers(true);
     void fetchAdminTestUsers(admin.admin_id)
       .then(setTestUsers)
@@ -130,16 +129,44 @@ export function EnvironmentOverviewPanel({
     if (checkingUsers) return;
     setCheckingUsers(true);
     try {
-      const res = await checkAdminTestUsers(admin.admin_id);
-      setUserCheck(res);
       const refreshed = await fetchAdminTestUsers(admin.admin_id);
       setTestUsers(refreshed);
-      if (res.success) onOk(`✓ Test Users\n\n${res.message}`);
-      else onError(`✕ Test User Validation\n\n${res.message}`);
+      const active = refreshed.active ?? 0;
+      const connected = refreshed.connected ?? 0;
+      const total = refreshed.total ?? refreshed.users.length;
+      onOk(`✓ Users\n\n${active} active · ${connected} connected of ${total}`);
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Test user check failed");
+      onError(err instanceof Error ? err.message : "User check failed");
     } finally {
       setCheckingUsers(false);
+    }
+  };
+
+  const setChannelLock = async (key: keyof ChannelLocks, locked: boolean) => {
+    if (savingLock) return;
+    setSavingLock(key);
+    try {
+      const current = admin.channel_locks || {
+        whatsapp: false,
+        email: false,
+        google_sheets: false,
+      };
+      const next = await saveChannelLocks(admin.admin_id, { ...current, [key]: locked });
+      onRefreshAdmin(next);
+      const labels: Record<keyof ChannelLocks, string> = {
+        whatsapp: "WhatsApp",
+        email: "Email",
+        google_sheets: "Google Sheets",
+      };
+      onOk(
+        locked
+          ? `${labels[key]} is locked in the main app. CMS settings are unchanged.`
+          : `${labels[key]} is unlocked in the main app.`,
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to update channel lock");
+    } finally {
+      setSavingLock(null);
     }
   };
 
@@ -149,6 +176,33 @@ export function EnvironmentOverviewPanel({
       ? (admin.last_health.integrations as Record<string, { status?: string }> | undefined)
       : undefined;
   const integrationSource = integ || lastHealthIntegrations || {};
+  const sheets = admin.googleSheets;
+  const sheetsConfigured = Boolean(
+    sheets?.google_sheet_id ||
+      sheets?.google_service_account_json_set ||
+      sheets?.google_oauth_client_id,
+  );
+  const sheetsHealth = Object.entries(integrationSource).find(([key]) =>
+    /google|sheets/i.test(key),
+  )?.[1] as { status?: string } | undefined;
+  const sheetsConnected = sheetsHealth?.status === "pass";
+  const sheetsStatusLabel = sheetsConnected
+    ? "· Connected"
+    : sheetsConfigured || sheets?.enabled
+      ? "· Configured"
+      : "· Not connected";
+  const activeUsers =
+    testUsers?.active ??
+    (testUsers?.users || []).filter((u) => u.is_active || u.status === "Active").length;
+  const connectedUsers =
+    testUsers?.connected ??
+    (testUsers?.users || []).filter((u) => u.connected || u.check_status === "pass").length;
+  const totalUsers = testUsers?.total ?? (testUsers?.users || []).length;
+  const locks = admin.channel_locks || {
+    whatsapp: false,
+    email: false,
+    google_sheets: false,
+  };
 
   return (
     <div className="space-y-8 px-4 py-6 sm:px-6 lg:px-8">
@@ -169,6 +223,73 @@ export function EnvironmentOverviewPanel({
             {checking ? "Checking Environment…" : "Check Environment Connection"}
           </button>
         </div>
+
+        <p className="mt-5 text-sm text-[var(--muted)]">
+          Lock or Unlock applies immediately to every Admin and User login of this tenant.
+          Freemium clients can use WhatsApp and Email while card scans remain. CMS settings stay
+          editable.
+        </p>
+
+        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+          {(
+            [
+              ["google_sheets", "Google Sheets", sheetsStatusLabel],
+              ["whatsapp", "WhatsApp", ""],
+              ["email", "Email", ""],
+            ] as const
+          ).map(([key, title, extra]) => {
+            const locked = locks[key];
+            return (
+              <div
+                key={key}
+                className={`rounded-md border px-3 py-3 ${
+                  locked
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-emerald-200 bg-emerald-50"
+                }`}
+              >
+                <dt className={locked ? "text-amber-800" : "text-emerald-800"}>{title}</dt>
+                <dd
+                  className={`mt-1 font-semibold ${
+                    locked ? "text-amber-900" : "text-emerald-900"
+                  }`}
+                >
+                  {locked ? "Locked in main app" : "Unlocked in main app"}
+                  {extra ? <span className="ml-2 font-medium">{extra}</span> : null}
+                </dd>
+                <button
+                  type="button"
+                  disabled={savingLock === key}
+                  onClick={() => void setChannelLock(key, !locked)}
+                  className="mt-3 rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {savingLock === key ? "Saving…" : locked ? "Unlock" : "Lock"}
+                </button>
+              </div>
+            );
+          })}
+        </dl>
+
+        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+          <div className="rounded-md border border-[var(--line)] px-3 py-3">
+            <dt className="text-[var(--muted)]">Users active</dt>
+            <dd className="mt-1 text-lg font-semibold">
+              {loadingUsers ? "…" : activeUsers}
+            </dd>
+          </div>
+          <div className="rounded-md border border-[var(--line)] px-3 py-3">
+            <dt className="text-[var(--muted)]">Users connected</dt>
+            <dd className="mt-1 text-lg font-semibold">
+              {loadingUsers ? "…" : connectedUsers}
+            </dd>
+          </div>
+          <div className="rounded-md border border-[var(--line)] px-3 py-3">
+            <dt className="text-[var(--muted)]">Users total</dt>
+            <dd className="mt-1 text-lg font-semibold">
+              {loadingUsers ? "…" : totalUsers}
+            </dd>
+          </div>
+        </dl>
 
         <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
           <div>
@@ -239,6 +360,17 @@ export function EnvironmentOverviewPanel({
             <p className="text-sm font-medium">Integrations</p>
             <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
               {Object.entries(integrationSource).map(([key, val]) => {
+                const channelLocked =
+                  (/whatsapp/i.test(key) && locks.whatsapp) ||
+                  (/(^email$|smtp)/i.test(key) && locks.email) ||
+                  (/google|sheets/i.test(key) && locks.google_sheets);
+                if (channelLocked) {
+                  return (
+                    <li key={key} className="text-amber-800">
+                      🔒 {key}: Locked
+                    </li>
+                  );
+                }
                 const status = String(
                   (val as { status?: string } | undefined)?.status || "disabled",
                 );
@@ -288,11 +420,10 @@ export function EnvironmentOverviewPanel({
       <section className="rounded-md border border-[var(--line)] bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h3 className="text-base font-semibold">Test Users</h3>
+            <h3 className="text-base font-semibold">Users</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Configure how many USER accounts this tenant should have for environment
-              validation. Users are created via the main app invite flow (not auto-created
-              here).
+              Tenant users for this client. Active means the account is enabled.
+              Connected means they currently have a live app session.
             </p>
           </div>
           <button
@@ -301,7 +432,7 @@ export function EnvironmentOverviewPanel({
             onClick={() => void runUserCheck()}
             className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
           >
-            {checkingUsers ? "Checking Test Users…" : "Check Test Users"}
+            {checkingUsers ? "Checking Users…" : "Check Users"}
           </button>
         </div>
 
@@ -327,33 +458,29 @@ export function EnvironmentOverviewPanel({
           </button>
         </div>
 
-        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-4">
+        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
           <div>
-            <dt className="text-[var(--muted)]">Configured</dt>
-            <dd className="font-medium">{testUsers?.configured ?? admin.test_users_limit ?? 0}</dd>
+            <dt className="text-[var(--muted)]">Active</dt>
+            <dd className="font-medium">
+              {loadingUsers ? "…" : (testUsers?.active ?? 0)}
+            </dd>
           </div>
           <div>
-            <dt className="text-[var(--muted)]">Created</dt>
-            <dd className="font-medium">{loadingUsers ? "…" : (testUsers?.created ?? 0)}</dd>
+            <dt className="text-[var(--muted)]">Connected</dt>
+            <dd className="font-medium">
+              {loadingUsers ? "…" : (testUsers?.connected ?? 0)}
+            </dd>
           </div>
           <div>
-            <dt className="text-[var(--muted)]">Available</dt>
-            <dd className="font-medium">{loadingUsers ? "…" : (testUsers?.available ?? 0)}</dd>
-          </div>
-          <div>
-            <dt className="text-[var(--muted)]">Remaining</dt>
-            <dd className="font-medium">{loadingUsers ? "…" : (testUsers?.remaining ?? 0)}</dd>
+            <dt className="text-[var(--muted)]">Total</dt>
+            <dd className="font-medium">
+              {loadingUsers ? "…" : (testUsers?.total ?? testUsers?.users.length ?? 0)}
+            </dd>
           </div>
         </dl>
 
         {testUsers?.note ? (
           <p className="mt-3 text-sm text-[var(--muted)]">{testUsers.note}</p>
-        ) : null}
-
-        {userCheck ? (
-          <p className="mt-3 text-sm font-medium">
-            Overall: {userCheck.passed} / {userCheck.total} test users working
-          </p>
         ) : null}
 
         <div className="mt-4 overflow-x-auto">
@@ -362,17 +489,18 @@ export function EnvironmentOverviewPanel({
               <tr>
                 <th className="py-2 pr-4 font-medium">User</th>
                 <th className="py-2 pr-4 font-medium">Role</th>
-                <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 font-medium">Last Check</th>
+                <th className="py-2 pr-4 font-medium">Active</th>
+                <th className="py-2 pr-4 font-medium">Connected</th>
+                <th className="py-2 font-medium">Last login</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--line)]">
               {(testUsers?.users || []).length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-4 text-[var(--muted)]">
+                  <td colSpan={5} className="py-4 text-[var(--muted)]">
                     {loadingUsers
-                      ? "Loading test users…"
-                      : "No USER accounts under this tenant yet."}
+                      ? "Loading users…"
+                      : "No Admin or User accounts under this tenant yet."}
                   </td>
                 </tr>
               ) : (
@@ -384,15 +512,14 @@ export function EnvironmentOverviewPanel({
                     </td>
                     <td className="py-2.5 pr-4">{u.role}</td>
                     <td className="py-2.5 pr-4">
-                      {u.status === "Active" || u.check_status === "pass"
-                        ? "✓ Active"
-                        : u.status === "Failed" || u.check_status === "fail"
-                          ? "✕ Failed"
-                          : u.status === "Inactive"
-                            ? "Inactive"
-                            : "Pending"}
+                      {u.is_active || u.status === "Active" ? "✓ Active" : "Inactive"}
                     </td>
-                    <td className="py-2.5">{formatWhen(u.last_test)}</td>
+                    <td className="py-2.5 pr-4">
+                      {u.connected || u.check_status === "pass"
+                        ? "✓ Connected"
+                        : "Not connected"}
+                    </td>
+                    <td className="py-2.5">{formatWhen(u.last_login || u.last_test)}</td>
                   </tr>
                 ))
               )}
