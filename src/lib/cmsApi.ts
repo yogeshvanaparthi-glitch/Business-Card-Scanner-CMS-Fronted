@@ -548,7 +548,6 @@ export async function saveAdminEnv(
   adminId: string,
   payload: {
     whatsapp: WhatsAppEnv;
-    email: EmailEnv;
     templates: TemplateEnv;
     googleSheets: GoogleSheetsEnv;
   },
@@ -559,7 +558,6 @@ export async function saveAdminEnv(
       method: "PUT",
       body: JSON.stringify({
         whatsapp: { ...payload.whatsapp, enabled: false },
-        email: { ...payload.email, enabled: false },
         templates: payload.templates,
         google_sheets: {
           ...payload.googleSheets,
@@ -671,24 +669,6 @@ export async function testAdminWhatsApp(
   });
 }
 
-export async function testAdminEmail(
-  adminId: string,
-  payload: {
-    contact_email: string;
-    email: EmailEnv;
-    templates: TemplateEnv;
-  },
-): Promise<{ success: boolean; to?: string; subject?: string }> {
-  return apiJson(`/api/cms/admin-env/${adminId}/test-email`, {
-    method: "POST",
-    body: JSON.stringify({
-      contact_email: payload.contact_email,
-      email: { ...payload.email, enabled: true },
-      templates: payload.templates,
-    }),
-  });
-}
-
 export async function testAdminGoogleSheets(
   adminId: string,
   payload: { googleSheets: GoogleSheetsEnv },
@@ -779,8 +759,11 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
   };
   const integrations = res.integrations || {};
   const integLines = Object.entries(integrations).map(([key, val]) => {
-    if (/^(whatsapp|email)$/i.test(key) || /whatsapp|smtp/i.test(key)) {
+    if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
       return `${key}: 🔒 locked`;
+    }
+    if (/^email$/i.test(key) || /smtp/i.test(key)) {
+      return `${key}: server .env`;
     }
     const status = String(val?.status || "disabled");
     const mark =
@@ -805,7 +788,7 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
       `Project Version: ${res.versions?.project ?? "—"}`,
       "Environment Health: ✓ Healthy",
       "",
-      "Channel access: Google Sheets only (WhatsApp and Email locked)",
+      "Channel access: Google Sheets (CMS) + Email SMTP (server .env). WhatsApp locked.",
       ...integLines,
       "",
       "Environment data is stored in CMS and successfully connected to the project environment.",
@@ -931,15 +914,6 @@ export const WHATSAPP_FIELD_LABELS: Partial<Record<keyof WhatsAppEnv, string>> =
   scan_template_name: "WHATSAPP_SCAN_TEMPLATE_NAME",
 };
 
-export const EMAIL_FIELD_LABELS: Partial<Record<keyof EmailEnv, string>> = {
-  smtp_host: "SMTP_HOST",
-  smtp_port: "SMTP_PORT",
-  smtp_user: "SMTP_USER",
-  smtp_password: "SMTP_PASSWORD",
-  smtp_from: "SMTP_FROM",
-  sender_notification_email: "SENDER_NOTIFICATION_EMAIL",
-};
-
 export const GOOGLE_SHEETS_FIELD_LABELS: Partial<Record<keyof GoogleSheetsEnv, string>> = {
   google_sheet_id: "Google Sheet ID",
   google_sheet_name: "Google Sheet Name",
@@ -964,15 +938,6 @@ export const WHATSAPP_INPUT_KEYS: (keyof WhatsAppEnv)[] = [
   "scan_template_name",
 ];
 
-export const EMAIL_INPUT_KEYS: (keyof EmailEnv)[] = [
-  "smtp_host",
-  "smtp_port",
-  "smtp_user",
-  "smtp_password",
-  "smtp_from",
-  "sender_notification_email",
-];
-
 export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
   "google_sheet_id",
   "google_sheet_name",
@@ -983,7 +948,6 @@ export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
 ];
 
 export const SECRET_WHATSAPP = new Set<string>(["access_token", "app_secret"]);
-export const SECRET_EMAIL = new Set<string>(["smtp_password"]);
 export const SECRET_GOOGLE_SHEETS = new Set<string>([
   "google_service_account_json",
   "google_oauth_client_secret",

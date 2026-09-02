@@ -235,8 +235,11 @@ export function EnvironmentOverviewPanel({
           </button>
         </div>
 
-        <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          Only <strong>Google Sheets</strong> has access. WhatsApp and Email are locked.
+        <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+          Per-Admin CMS covers <strong>Google Sheets</strong> and <strong>message templates</strong>.
+          Email SMTP uses the server <code className="text-[var(--ink)]">.env</code> (
+          <code className="text-[var(--ink)]">SMTP_INTERNAL_*</code> /{" "}
+          <code className="text-[var(--ink)]">SMTP_EXTERNAL_*</code>). WhatsApp remains locked.
         </div>
 
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
@@ -251,9 +254,14 @@ export function EnvironmentOverviewPanel({
             <dt className="text-amber-800">WhatsApp</dt>
             <dd className="mt-1 font-semibold text-amber-900">Locked · No access</dd>
           </div>
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
-            <dt className="text-amber-800">Email</dt>
-            <dd className="mt-1 font-semibold text-amber-900">Locked · No access</dd>
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+            <dt className="text-slate-700">Email (Amazon SES)</dt>
+            <dd className="mt-1 font-semibold text-slate-900">
+              Server .env
+              <span className="ml-2 text-xs font-normal text-slate-600">
+                INTERNAL + EXTERNAL lanes
+              </span>
+            </dd>
           </div>
         </dl>
 
@@ -347,10 +355,17 @@ export function EnvironmentOverviewPanel({
             <p className="text-sm font-medium">Integrations</p>
             <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
               {Object.entries(integrationSource).map(([key, val]) => {
-                if (/^(whatsapp|email)$/i.test(key) || /whatsapp|smtp/i.test(key)) {
+                if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
                   return (
                     <li key={key} className="text-amber-800">
                       🔒 {key}: Locked
+                    </li>
+                  );
+                }
+                if (/^email$/i.test(key) || /smtp/i.test(key)) {
+                  return (
+                    <li key={key} className="text-slate-700">
+                      {key}: server .env (not in CMS)
                     </li>
                   );
                 }
