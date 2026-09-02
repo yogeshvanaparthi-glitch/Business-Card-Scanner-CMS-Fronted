@@ -22,7 +22,7 @@ export default function App() {
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/login/" element={<Navigate to="/login" replace />} />
+            <Route path="/login/" element={<LoginPage />} />
             <Route path="/" element={<CmsDashboard />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

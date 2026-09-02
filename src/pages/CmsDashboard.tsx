@@ -1,4 +1,3 @@
-import { WhatsAppSetupPanel } from "@/components/WhatsAppSetupPanel";
 import { EnvironmentOverviewPanel } from "@/components/EnvironmentOverviewPanel";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
@@ -17,13 +16,12 @@ import {
   previewValueForToken,
   REVIEW_FIELD_OPTIONS,
   removeAdminEnv,
+  removeCmsClient,
   saveAdminEnv,
   SECRET_EMAIL,
   SECRET_GOOGLE_SHEETS,
   SECRET_WHATSAPP,
-  testAdminEmail,
   testAdminGoogleSheets,
-  testAdminWhatsApp,
   WHATSAPP_FIELD_LABELS,
   WHATSAPP_HEADER_FORMATS,
   WHATSAPP_INPUT_KEYS,
@@ -65,22 +63,29 @@ export function CmsDashboard() {
     }
   }, []);
 
-  const removeEnv = async (admin: AdminEnvRow) => {
+  const removeClient = async (admin: AdminEnvRow) => {
     const name = displayName(admin);
     const clientLabel = admin.company_name || name;
     if (
       !window.confirm(
-        `Remove all CMS WhatsApp, Email, Google Sheets, and template settings for ${clientLabel}?\n\nThis tenant will not fall back to another client's credentials. Channels stay off until you save again.`,
+        `Remove ${clientLabel} from CMS and the app?\n\nThis deletes the company, its Admin/Users, registration requests, and CMS WhatsApp/Email settings. They will disappear from both this list and Manage Team.`,
       )
     ) {
       return;
     }
     try {
-      const next = await removeAdminEnv(admin.admin_id);
-      setAdmins((prev) => prev.map((a) => (a.admin_id === next.admin_id ? next : a)));
+      await removeCmsClient(admin.admin_id);
+      setAdmins((prev) => {
+        const next = prev.filter((a) => a.admin_id !== admin.admin_id);
+        setSelectedId((current) => {
+          if (current !== admin.admin_id) return current;
+          return next[0]?.admin_id ?? null;
+        });
+        return next;
+      });
       setMessage({
         type: "ok",
-        text: `Removed CMS environment for ${clientLabel}. Tenant channels are off until reconfigured.`,
+        text: `Removed ${clientLabel} from CMS and the app.`,
       });
     } catch (err) {
       setMessage({
@@ -263,20 +268,18 @@ export function CmsDashboard() {
                             </span>
                           </div>
                         </button>
-                        {admin.has_settings ? (
-                          <button
+                        <button
                             type="button"
-                            title="Remove CMS env"
-                            aria-label={`Remove CMS env for ${displayName(admin)}`}
+                            title="Remove client from CMS and the app"
+                            aria-label={`Remove client ${displayName(admin)}`}
                             onClick={(e) => {
                               e.stopPropagation();
-                              void removeEnv(admin);
+                              void removeClient(admin);
                             }}
                             className="shrink-0 self-center px-3 py-2 text-xs font-semibold text-[var(--danger)] hover:bg-red-50"
                           >
                             Remove
                           </button>
-                        ) : null}
                       </div>
                     </li>
                   );
@@ -306,7 +309,7 @@ export function CmsDashboard() {
                 );
                 setMessage({
                   type: "ok",
-                  text: `Removed CMS environment for ${displayName(next)}. Using global .env.`,
+                  text: `Cleared CMS environment for ${displayName(next)}. Save again to reconnect channels.`,
                 });
               }}
               onOk={(text) => setMessage({ type: "ok", text })}
@@ -336,15 +339,13 @@ function AdminEnvEditor({
   onOk: (text: string) => void;
   onError: (text: string) => void;
 }) {
-  const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>(admin.whatsapp);
-  const [emailEnv, setEmailEnv] = useState<EmailEnv>(admin.emailEnv);
+  const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>({ ...admin.whatsapp, enabled: false });
+  const [emailEnv, setEmailEnv] = useState<EmailEnv>({ ...admin.emailEnv, enabled: false });
   const [googleSheets, setGoogleSheets] = useState<GoogleSheetsEnv>(admin.googleSheets);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testPhone, setTestPhone] = useState("");
-  const [testEmailAddr, setTestEmailAddr] = useState("");
   const [section, setSection] = useState<
     "overview" | "whatsapp" | "email" | "templates" | "google"
   >("overview");
@@ -354,13 +355,11 @@ function AdminEnvEditor({
   } | null>(null);
 
   useEffect(() => {
-    setWhatsapp(admin.whatsapp);
-    setEmailEnv(admin.emailEnv);
+    setWhatsapp({ ...admin.whatsapp, enabled: false });
+    setEmailEnv({ ...admin.emailEnv, enabled: false });
     setGoogleSheets(admin.googleSheets);
     setTemplates(admin.templates);
     setSection("overview");
-    setTestPhone(admin.phone || "");
-    setTestEmailAddr("");
     setSheetsHealth(null);
   }, [admin]);
 
@@ -368,8 +367,8 @@ function AdminEnvEditor({
     setSaving(true);
     try {
       const next = await saveAdminEnv(admin.admin_id, {
-        whatsapp,
-        email: emailEnv,
+        whatsapp: { ...whatsapp, enabled: false },
+        email: { ...emailEnv, enabled: false },
         templates,
         googleSheets,
       });
@@ -397,54 +396,6 @@ function AdminEnvEditor({
       onError(err instanceof Error ? err.message : "Remove failed");
     } finally {
       setRemoving(false);
-    }
-  };
-
-  const runWhatsAppTest = async () => {
-    if (!testPhone.trim()) {
-      onError("Enter a phone number to test WhatsApp.");
-      return;
-    }
-    setTesting(true);
-    try {
-      const res = await testAdminWhatsApp(admin.admin_id, testPhone.trim(), whatsapp);
-      onOk(
-        res.message ||
-          `WhatsApp message sent successfully to ${res.to || testPhone}${
-            res.message_id ? ` · id ${res.message_id}` : ""
-          }`,
-      );
-    } catch (err) {
-      const raw = err instanceof Error ? err.message : "WhatsApp test failed";
-      if (/failed to fetch|cannot reach the api server|networkerror|load failed|err_connection/i.test(raw)) {
-        onError("Unable to connect to WhatsApp service.");
-        return;
-      }
-      onError(raw);
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const runEmailTest = async () => {
-    if (!testEmailAddr.trim()) {
-      onError("Enter an email address to test SMTP.");
-      return;
-    }
-    setTesting(true);
-    try {
-      const res = await testAdminEmail(admin.admin_id, {
-        contact_email: testEmailAddr.trim(),
-        email: emailEnv,
-        templates,
-      });
-      onOk(
-        `Email test sent to ${res.to || testEmailAddr}${res.subject ? ` · ${res.subject}` : ""}`,
-      );
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "Email test failed");
-    } finally {
-      setTesting(false);
     }
   };
 
@@ -503,7 +454,7 @@ function AdminEnvEditor({
             onClick={() => void remove()}
             className="rounded-md border border-red-200 bg-white px-5 py-2.5 text-sm font-semibold text-[var(--danger)] shadow-sm hover:bg-red-50 disabled:opacity-40"
           >
-            {removing ? "Removing…" : "Remove"}
+            {removing ? "Clearing…" : "Clear env"}
           </button>
           <button
             type="button"
@@ -522,8 +473,8 @@ function AdminEnvEditor({
             [
               ["overview", "Environment"],
               ["templates", "Templates & preview"],
-              ["whatsapp", "WhatsApp env"],
-              ["email", "Email env"],
+              ["whatsapp", "WhatsApp 🔒"],
+              ["email", "Email 🔒"],
               ["google", "Google Sheets"],
             ] as const
           ).map(([id, label]) => (
@@ -561,23 +512,16 @@ function AdminEnvEditor({
           />
         ) : section === "whatsapp" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
-            <WhatsAppSetupPanel
-              adminId={admin.admin_id}
-              whatsapp={whatsapp}
-              onError={onError}
-              onOk={onOk}
-            />
             <FormSection
               title="WhatsApp Cloud API (Meta)"
-              enabled={whatsapp.enabled}
-              onEnabledChange={(enabled) => setWhatsapp((w) => ({ ...w, enabled }))}
+              enabled={false}
+              locked
+              onEnabledChange={() => undefined}
             >
               <p className="mb-4 text-sm text-[var(--muted)]">
                 Same keys as <code className="text-[var(--ink)]">BusinessCardScanner_Backend/.env</code>.
-                Secrets stay masked after save. Use <strong>Check status</strong> above before opening Meta.
-                Test WhatsApp uses CMS template fields (
-                <code className="text-[var(--ink)]">card_received_template_name</code>, etc.) then server env
-                fallback.
+                Live WhatsApp send is frozen for this product stage. Credentials can still be stored
+                for later; Test and Enable stay off.
               </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
@@ -593,29 +537,24 @@ function AdminEnvEditor({
                           : undefined
                     }
                     value={String(whatsapp[key] ?? "")}
-                    onChange={(v) => setWhatsapp((w) => ({ ...w, [key]: v }))}
+                    onChange={(v) => setWhatsapp((w) => ({ ...w, [key]: v, enabled: false }))}
                   />
                 ))}
               </div>
-              <TestSendBar
-                label="Test phone"
-                placeholder="+91…"
-                value={testPhone}
-                onChange={setTestPhone}
-                testing={testing}
-                disabled={saving}
-                onTest={() => void runWhatsAppTest()}
-                buttonLabel="Test WhatsApp"
-              />
             </FormSection>
           </div>
         ) : section === "email" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
             <FormSection
               title="Email environment"
-              enabled={emailEnv.enabled}
-              onEnabledChange={(enabled) => setEmailEnv((em) => ({ ...em, enabled }))}
+              enabled={false}
+              locked
+              onEnabledChange={() => undefined}
             >
+              <p className="mb-4 text-sm text-[var(--muted)]">
+                Live Email send is frozen for this product stage. SMTP settings can still be stored
+                for later; Test and Enable stay off.
+              </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {EMAIL_INPUT_KEYS.map((key) => (
                   <Field
@@ -635,20 +574,10 @@ function AdminEnvEditor({
                           : undefined
                     }
                     value={String(emailEnv[key] ?? "")}
-                    onChange={(v) => setEmailEnv((em) => ({ ...em, [key]: v }))}
+                    onChange={(v) => setEmailEnv((em) => ({ ...em, [key]: v, enabled: false }))}
                   />
                 ))}
               </div>
-              <TestSendBar
-                label="Test email"
-                placeholder="you@example.com"
-                value={testEmailAddr}
-                onChange={setTestEmailAddr}
-                testing={testing}
-                disabled={saving}
-                onTest={() => void runEmailTest()}
-                buttonLabel="Test Email"
-              />
             </FormSection>
           </div>
         ) : (
@@ -746,6 +675,10 @@ function TemplatesWorkspace({
   return (
     <div className="grid w-full grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
       <div className="space-y-5 border-b border-[var(--line)] px-4 py-6 sm:px-6 lg:px-8 xl:border-b-0 xl:border-r">
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Live WhatsApp and Email send is locked. These editors are for stored templates and
+          preview only.
+        </p>
         <p className="text-sm text-[var(--muted)]">
           Fixed email chrome comes from <code className="text-[var(--ink)]">thank-you.html</code>.
           Map each {"{{N}}"} token to a Review-page field — on send, the scanned value fills that
@@ -1202,83 +1135,49 @@ function GoogleSheetsHealthPanel({
   );
 }
 
-function TestSendBar({
-  label,
-  placeholder,
-  value,
-  onChange,
-  testing,
-  disabled,
-  onTest,
-  buttonLabel,
-}: {
-  label: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  testing: boolean;
-  disabled?: boolean;
-  onTest: () => void;
-  buttonLabel: string;
-}) {
-  return (
-    <div className="mt-6 flex flex-col gap-3 border-t border-[var(--line)] pt-5 sm:flex-row sm:items-end">
-      <label className="min-w-0 flex-1 text-sm">
-        <span className="mb-1.5 block font-medium">{label}</span>
-        <input
-          className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
-      <button
-        type="button"
-        disabled={testing || disabled}
-        onClick={onTest}
-        className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
-      >
-        {testing ? "Testing…" : buttonLabel}
-      </button>
-    </div>
-  );
-}
-
 function FormSection({
   title,
   enabled,
   onEnabledChange,
+  locked = false,
   children,
 }: {
   title: string;
   enabled: boolean;
   onEnabledChange: (v: boolean) => void;
+  locked?: boolean;
   children: ReactNode;
 }) {
   return (
     <section className="w-full">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-base font-semibold">{title}</h3>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          onClick={() => onEnabledChange(!enabled)}
-          className="inline-flex items-center gap-2 text-sm font-medium"
-        >
-          <span className="text-[var(--muted)]">Enabled</span>
-          <span
-            className={`relative h-6 w-11 rounded-full transition ${
-              enabled ? "bg-[var(--brand)]" : "bg-slate-300"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
-                enabled ? "translate-x-5" : ""
-              }`}
-            />
+        {locked ? (
+          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-amber-800">
+            Locked
           </span>
-        </button>
+        ) : (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            onClick={() => onEnabledChange(!enabled)}
+            className="inline-flex items-center gap-2 text-sm font-medium"
+          >
+            <span className="text-[var(--muted)]">Enabled</span>
+            <span
+              className={`relative h-6 w-11 rounded-full transition ${
+                enabled ? "bg-[var(--brand)]" : "bg-slate-300"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
+                  enabled ? "translate-x-5" : ""
+                }`}
+              />
+            </span>
+          </button>
+        )}
       </div>
       {children}
     </section>

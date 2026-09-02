@@ -36,13 +36,13 @@ frontend:
         - key: "Cache-Control"
           value: "no-cache, no-store, must-revalidate"
 customRules:
-  # SPA fallback — required for direct /login URLs and browser refresh on deep links.
+  # SPA fallback — 404-200 rewrites missing paths to index.html (required for /login/ refresh).
   - source: "/login"
     target: "/index.html"
-    status: "200"
+    status: "404-200"
   - source: "/login/"
     target: "/index.html"
-    status: "200"
-  - source: '</^[^.]+$|\.(?!(css|gif|ico|jpg|js|png|txt|svg|woff|woff2|ttf|map|json|webp)$)([^.]+$)/>'
+    status: "404-200"
+  - source: "/<*>"
     target: "/index.html"
-    status: "200"
+    status: "404-200"

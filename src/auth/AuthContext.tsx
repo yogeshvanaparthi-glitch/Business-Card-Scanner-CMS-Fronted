@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const stored = loadStoredUser();
     const token = getAccessToken();
     const refresh = getRefreshToken();
-    if (stored && (token || refresh)) {
+    if (stored && (token || refresh) && stored.role === "SUPER_ADMIN") {
       setUser(stored);
     } else {
       clearSession();
