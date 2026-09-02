@@ -9,6 +9,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/login/" element={<LoginPage />} />
           <Route path="/" element={<CmsDashboard />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
