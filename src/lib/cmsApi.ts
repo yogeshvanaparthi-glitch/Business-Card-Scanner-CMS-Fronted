@@ -96,6 +96,8 @@ export type AdminEnvRow = {
   channel_locks: ChannelLocks;
   /** Inbox that receives scanned-contact details copy for this Admin's company. */
   receive_email: string;
+  /** From header display name stored on the Admin's company. */
+  email_display_name: string;
 };
 
 export type ChannelLocks = {
@@ -527,6 +529,7 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
           : "") ||
         "",
     ),
+    email_display_name: String(raw.email_display_name ?? ""),
     settings_updated_at: raw.settings_updated_at ? String(raw.settings_updated_at) : null,
     config_version: Number(raw.config_version ?? 0) || 0,
     project_config_version:
@@ -627,6 +630,20 @@ export async function saveAdminReceiveEmail(
           enabled: false,
         },
       }),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminEmailDisplayName(
+  adminId: string,
+  displayName: string,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}/email-display-name`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ email_display_name: displayName.trim() }),
     },
   );
   return normalizeAdminEnvItem(res.item);

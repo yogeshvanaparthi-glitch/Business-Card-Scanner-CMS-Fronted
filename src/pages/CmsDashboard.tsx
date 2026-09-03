@@ -307,6 +307,10 @@ export function CmsDashboard() {
                             next.emailEnv?.sender_notification_email ||
                             a.receive_email ||
                             "",
+                          email_display_name:
+                            next.email_display_name !== undefined
+                              ? next.email_display_name
+                              : a.email_display_name || "",
                           emailEnv: {
                             ...a.emailEnv,
                             ...next.emailEnv,

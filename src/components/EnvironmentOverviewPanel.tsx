@@ -5,6 +5,7 @@ import {
   formatEnvironmentCheckMessage,
   saveAdminChannelLocks,
   saveAdminReceiveEmail,
+  saveAdminEmailDisplayName,
   saveAdminTestUsersLimit,
   setTenantUserScanEntitlement,
   DEFAULT_SCAN_CARD_LIMIT,
@@ -63,6 +64,8 @@ export function EnvironmentOverviewPanel({
   const [savingLock, setSavingLock] = useState<keyof ChannelLocks | null>(null);
   const [receiveEmail, setReceiveEmail] = useState(admin.receive_email || "");
   const [savingReceive, setSavingReceive] = useState(false);
+  const [emailDisplayName, setEmailDisplayName] = useState(admin.email_display_name || "");
+  const [savingDisplayName, setSavingDisplayName] = useState(false);
 
   const env = admin.environment;
   const locks = admin.channel_locks || {
@@ -76,13 +79,14 @@ export function EnvironmentOverviewPanel({
   useEffect(() => {
     setTestLimit(String(admin.test_users_limit ?? 0));
     setReceiveEmail(admin.receive_email || admin.emailEnv?.sender_notification_email || "");
+    setEmailDisplayName(admin.email_display_name || "");
     setEnvResult(null);
     setLoadingUsers(true);
     void fetchAdminTestUsers(admin.admin_id)
       .then(setTestUsers)
       .catch(() => setTestUsers(null))
       .finally(() => setLoadingUsers(false));
-  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at, admin.receive_email, admin.emailEnv?.sender_notification_email]);
+  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at, admin.receive_email, admin.emailEnv?.sender_notification_email, admin.email_display_name]);
 
   const runEnvCheck = async () => {
     if (checking) return;
@@ -244,6 +248,30 @@ export function EnvironmentOverviewPanel({
       onError(err instanceof Error ? err.message : "Failed to save Receive email");
     } finally {
       setSavingReceive(false);
+    }
+  };
+
+  const saveEmailDisplayName = async () => {
+    if (savingDisplayName) return;
+    const value = emailDisplayName.trim();
+    if (value.length > 255) {
+      onError("Email Display Name must be 255 characters or fewer.");
+      return;
+    }
+    setSavingDisplayName(true);
+    try {
+      const next = await saveAdminEmailDisplayName(admin.admin_id, value);
+      setEmailDisplayName(next.email_display_name ?? value);
+      onRefreshAdmin(next);
+      onOk(
+        value
+          ? `Email Display Name saved: ${value}`
+          : "Email Display Name cleared — default From name will be used.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Email Display Name");
+    } finally {
+      setSavingDisplayName(false);
     }
   };
 
@@ -418,6 +446,34 @@ export function EnvironmentOverviewPanel({
                 className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
               >
                 {savingReceive ? "Saving…" : "Save receive email"}
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Email Display Name</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Set the display name that recipients will see when emails are received from this
+              Admin Company. The From email address stays the same.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                value={emailDisplayName}
+                onChange={(e) => setEmailDisplayName(e.target.value)}
+                placeholder={admin.company_name || "ABC Company"}
+                maxLength={255}
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingDisplayName}
+                onClick={() => void saveEmailDisplayName()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingDisplayName ? "Saving…" : "Save"}
               </button>
             </div>
           </label>
