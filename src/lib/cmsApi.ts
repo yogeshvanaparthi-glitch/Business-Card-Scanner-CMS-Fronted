@@ -66,12 +66,6 @@ export type TemplateEnv = {
   token_map: Record<string, string>;
 };
 
-export type ChannelLocks = {
-  whatsapp: boolean;
-  email: boolean;
-  google_sheets: boolean;
-};
-
 export type PaymentSnapshot = {
   payment_done: boolean;
   payment_status: string;
@@ -107,8 +101,19 @@ export type AdminEnvRow = {
   last_health?: Record<string, unknown> | null;
   test_users_limit?: number;
   environment?: EnvironmentMeta;
+  /** CMS kill-switches: true = channel OFF for that company in the main app. */
   channel_locks: ChannelLocks;
+  /** Inbox that receives scanned-contact details copy for this Admin's company. */
+  receive_email: string;
+  /** From header display name stored on the Admin's company. */
+  email_display_name: string;
   payment?: PaymentSnapshot;
+};
+
+export type ChannelLocks = {
+  whatsapp: boolean;
+  email: boolean;
+  google_sheets: boolean;
 };
 
 export type EnvironmentMeta = {
@@ -150,6 +155,11 @@ export type EnvironmentCheckResult = {
   };
 };
 
+export type ScanEntitlementMode = "default" | "unlimited" | "custom";
+
+/** Default personal scan cap for every user unless CMS overrides it. */
+export const DEFAULT_SCAN_CARD_LIMIT = 10;
+
 export type TestUserRow = {
   id: string;
   name: string;
@@ -158,6 +168,11 @@ export type TestUserRow = {
   status: string;
   is_active?: boolean;
   connected?: boolean;
+  scans_unlimited?: boolean;
+  user_card_limit?: number | null;
+  user_cards_used?: number;
+  effective_card_limit?: number | null;
+  scan_entitlement_mode?: ScanEntitlementMode;
   check_status?: string;
   last_login?: string | null;
   last_test?: string | null;
@@ -481,29 +496,6 @@ export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEn
   return filledShell;
 }
 
-function asChannelLocks(raw: unknown): ChannelLocks {
-  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  return {
-    whatsapp: Boolean(o.whatsapp),
-    email: Boolean(o.email),
-    google_sheets: Boolean(o.google_sheets),
-  };
-}
-
-function asPayment(raw: unknown): PaymentSnapshot | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const o = raw as Record<string, unknown>;
-  const done = Boolean(o.payment_done);
-  return {
-    payment_done: done,
-    payment_status: String(o.payment_status ?? (done ? "done" : "not_done")),
-    payment_label: String(o.payment_label ?? (done ? "payment paid" : "payment not paid")),
-    plan_name: o.plan_name ? String(o.plan_name) : undefined,
-    intent_status: o.intent_status ? String(o.intent_status) : null,
-    package_id: o.package_id ? String(o.package_id) : null,
-  };
-}
-
 export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow {
   const adminId = String(raw.admin_id ?? "");
   const companyId = raw.company_id ? String(raw.company_id) : null;
@@ -511,6 +503,15 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     raw.environment && typeof raw.environment === "object"
       ? (raw.environment as Record<string, unknown>)
       : null;
+  const locksRaw =
+    raw.channel_locks && typeof raw.channel_locks === "object"
+      ? (raw.channel_locks as Record<string, unknown>)
+      : {};
+  const paymentRaw =
+    raw.payment && typeof raw.payment === "object"
+      ? (raw.payment as Record<string, unknown>)
+      : null;
+  const paymentDone = Boolean(paymentRaw?.payment_done);
   return {
     admin_id: adminId,
     tenant_id: String(raw.tenant_id ?? companyId ?? adminId),
@@ -528,6 +529,39 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
     emailEnv: asEmail(raw.email_settings),
     googleSheets: asGoogleSheets(raw.google_sheets),
     templates: asTemplates(raw.templates),
+    channel_locks: {
+      whatsapp: locksRaw.whatsapp === undefined ? true : Boolean(locksRaw.whatsapp),
+      email: locksRaw.email === undefined ? false : Boolean(locksRaw.email),
+      google_sheets:
+        locksRaw.google_sheets === undefined ? false : Boolean(locksRaw.google_sheets),
+    },
+    receive_email: String(
+      raw.receive_email ||
+        (raw.email_settings && typeof raw.email_settings === "object"
+          ? String(
+              (raw.email_settings as Record<string, unknown>).sender_notification_email || "",
+            )
+          : "") ||
+        "",
+    ),
+    email_display_name: String(raw.email_display_name ?? ""),
+    payment: paymentRaw
+      ? {
+          payment_done: paymentDone,
+          payment_status: String(
+            paymentRaw.payment_status ?? (paymentDone ? "done" : "not_done"),
+          ),
+          payment_label: String(
+            paymentRaw.payment_label ??
+              (paymentDone ? "payment paid" : "payment not paid"),
+          ),
+          plan_name: paymentRaw.plan_name ? String(paymentRaw.plan_name) : undefined,
+          intent_status: paymentRaw.intent_status
+            ? String(paymentRaw.intent_status)
+            : null,
+          package_id: paymentRaw.package_id ? String(paymentRaw.package_id) : null,
+        }
+      : undefined,
     settings_updated_at: raw.settings_updated_at ? String(raw.settings_updated_at) : null,
     config_version: Number(raw.config_version ?? 0) || 0,
     project_config_version:
@@ -561,8 +595,6 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
             : null,
         }
       : undefined,
-    channel_locks: asChannelLocks(raw.channel_locks),
-    payment: asPayment(raw.payment),
   };
 }
 
@@ -580,7 +612,6 @@ export async function saveAdminEnv(
   adminId: string,
   payload: {
     whatsapp: WhatsAppEnv;
-    email: EmailEnv;
     templates: TemplateEnv;
     googleSheets: GoogleSheetsEnv;
   },
@@ -591,7 +622,6 @@ export async function saveAdminEnv(
       method: "PUT",
       body: JSON.stringify({
         whatsapp: { ...payload.whatsapp, enabled: false },
-        email: { ...payload.email, enabled: false },
         templates: payload.templates,
         google_sheets: {
           ...payload.googleSheets,
@@ -603,15 +633,49 @@ export async function saveAdminEnv(
   return normalizeAdminEnvItem(res.item);
 }
 
-export async function saveChannelLocks(
+export async function saveAdminChannelLocks(
   adminId: string,
   locks: Partial<ChannelLocks>,
 ): Promise<AdminEnvRow> {
   const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
     `/api/cms/admin-env/${adminId}/channel-locks`,
     {
-      method: "PATCH",
+      method: "PUT",
       body: JSON.stringify(locks),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminReceiveEmail(
+  adminId: string,
+  receiveEmail: string,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        email: {
+          sender_notification_email: receiveEmail.trim(),
+          receive_email: receiveEmail.trim(),
+          enabled: false,
+        },
+      }),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminEmailDisplayName(
+  adminId: string,
+  displayName: string,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}/email-display-name`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ email_display_name: displayName.trim() }),
     },
   );
   return normalizeAdminEnvItem(res.item);
@@ -717,24 +781,6 @@ export async function testAdminWhatsApp(
   });
 }
 
-export async function testAdminEmail(
-  adminId: string,
-  payload: {
-    contact_email: string;
-    email: EmailEnv;
-    templates: TemplateEnv;
-  },
-): Promise<{ success: boolean; to?: string; subject?: string }> {
-  return apiJson(`/api/cms/admin-env/${adminId}/test-email`, {
-    method: "POST",
-    body: JSON.stringify({
-      contact_email: payload.contact_email,
-      email: { ...payload.email, enabled: true },
-      templates: payload.templates,
-    }),
-  });
-}
-
 export async function testAdminGoogleSheets(
   adminId: string,
   payload: { googleSheets: GoogleSheetsEnv },
@@ -757,6 +803,44 @@ export async function checkAdminEnvironment(
 
 export async function fetchAdminTestUsers(adminId: string): Promise<TestUsersSummary> {
   return apiJson(`/api/cms/admin-env/${adminId}/test-users`);
+}
+
+export async function setTenantUserScansUnlimited(
+  adminId: string,
+  userId: string,
+  scansUnlimited: boolean,
+): Promise<{
+  success: boolean;
+  scans_unlimited: boolean;
+  user?: TestUserRow;
+  users: TestUsersSummary;
+}> {
+  return apiJson(`/api/cms/admin-env/${adminId}/users/${userId}/scans-unlimited`, {
+    method: "PATCH",
+    body: JSON.stringify({ scans_unlimited: scansUnlimited }),
+  });
+}
+
+export async function setTenantUserScanEntitlement(
+  adminId: string,
+  userId: string,
+  mode: ScanEntitlementMode,
+  limit?: number | null,
+): Promise<{
+  success: boolean;
+  scans_unlimited: boolean;
+  user_card_limit?: number | null;
+  scan_entitlement_mode?: ScanEntitlementMode;
+  user?: TestUserRow;
+  users: TestUsersSummary;
+}> {
+  return apiJson(`/api/cms/admin-env/${adminId}/users/${userId}/scan-entitlement`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      mode,
+      ...(mode === "custom" ? { limit: limit ?? null } : {}),
+    }),
+  });
 }
 
 export async function saveAdminTestUsersLimit(
@@ -787,8 +871,11 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
   };
   const integrations = res.integrations || {};
   const integLines = Object.entries(integrations).map(([key, val]) => {
-    if (/^(whatsapp|email)$/i.test(key) || /whatsapp|smtp/i.test(key)) {
+    if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
       return `${key}: 🔒 locked`;
+    }
+    if (/^email$/i.test(key) || /smtp/i.test(key)) {
+      return `${key}: server .env`;
     }
     const status = String(val?.status || "disabled");
     const mark =
@@ -813,7 +900,7 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
       `Project Version: ${res.versions?.project ?? "—"}`,
       "Environment Health: ✓ Healthy",
       "",
-      "Channel access: Google Sheets only (WhatsApp and Email locked)",
+      "Channel access: Google Sheets (CMS) + Email SMTP (server .env). WhatsApp locked.",
       ...integLines,
       "",
       "Environment data is stored in CMS and successfully connected to the project environment.",
@@ -939,15 +1026,6 @@ export const WHATSAPP_FIELD_LABELS: Partial<Record<keyof WhatsAppEnv, string>> =
   scan_template_name: "WHATSAPP_SCAN_TEMPLATE_NAME",
 };
 
-export const EMAIL_FIELD_LABELS: Partial<Record<keyof EmailEnv, string>> = {
-  smtp_host: "SMTP_HOST",
-  smtp_port: "SMTP_PORT",
-  smtp_user: "SMTP_USER",
-  smtp_password: "SMTP_PASSWORD",
-  smtp_from: "SMTP_FROM",
-  sender_notification_email: "SENDER_NOTIFICATION_EMAIL",
-};
-
 export const GOOGLE_SHEETS_FIELD_LABELS: Partial<Record<keyof GoogleSheetsEnv, string>> = {
   google_sheet_id: "Google Sheet ID",
   google_sheet_name: "Google Sheet Name",
@@ -972,15 +1050,6 @@ export const WHATSAPP_INPUT_KEYS: (keyof WhatsAppEnv)[] = [
   "scan_template_name",
 ];
 
-export const EMAIL_INPUT_KEYS: (keyof EmailEnv)[] = [
-  "smtp_host",
-  "smtp_port",
-  "smtp_user",
-  "smtp_password",
-  "smtp_from",
-  "sender_notification_email",
-];
-
 export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
   "google_sheet_id",
   "google_sheet_name",
@@ -991,7 +1060,6 @@ export const GOOGLE_SHEETS_INPUT_KEYS: (keyof GoogleSheetsEnv)[] = [
 ];
 
 export const SECRET_WHATSAPP = new Set<string>(["access_token", "app_secret"]);
-export const SECRET_EMAIL = new Set<string>(["smtp_password"]);
 export const SECRET_GOOGLE_SHEETS = new Set<string>([
   "google_service_account_json",
   "google_oauth_client_secret",

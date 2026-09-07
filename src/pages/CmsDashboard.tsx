@@ -6,8 +6,6 @@ import {
   applyTemplateVars,
   buildEmailPreviewHtml,
   displayName,
-  EMAIL_FIELD_LABELS,
-  EMAIL_INPUT_KEYS,
   fetchAdminEnvList,
   fetchEmailShell,
   formatGoogleSheetsHealthMessage,
@@ -18,7 +16,6 @@ import {
   removeAdminEnv,
   removeCmsClient,
   saveAdminEnv,
-  SECRET_EMAIL,
   SECRET_GOOGLE_SHEETS,
   SECRET_WHATSAPP,
   testAdminGoogleSheets,
@@ -26,7 +23,6 @@ import {
   WHATSAPP_HEADER_FORMATS,
   WHATSAPP_INPUT_KEYS,
   type AdminEnvRow,
-  type EmailEnv,
   type GoogleSheetsEnv,
   type GoogleSheetsHealthResult,
   type TemplateEnv,
@@ -54,10 +50,15 @@ export function CmsDashboard() {
         return items[0]?.admin_id ?? null;
       });
     } catch (err) {
+      const text = err instanceof Error ? err.message : "Failed to load admins";
       setMessage({
         type: "err",
-        text: err instanceof Error ? err.message : "Failed to load admins",
+        text,
       });
+      if (/session expired|log in again/i.test(text)) {
+        setAdmins([]);
+        setSelectedId(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -190,7 +191,7 @@ export function CmsDashboard() {
                 <p className="font-medium text-[var(--ink)]">No clients yet</p>
                 <p className="mt-2 leading-relaxed">
                   Create an Admin (client) in the main app (Manage Team). After they accept the
-                  invite, refresh here to configure their WhatsApp, Email, and Google Sheets.
+                  invite, refresh here to configure Google Sheets and message templates.
                 </p>
               </div>
             ) : (
@@ -305,7 +306,32 @@ export function CmsDashboard() {
               admin={selected}
               onSaved={(next) => {
                 setAdmins((prev) =>
-                  prev.map((a) => (a.admin_id === next.admin_id ? next : a)),
+                  prev.map((a) =>
+                    a.admin_id === next.admin_id
+                      ? {
+                          ...a,
+                          ...next,
+                          receive_email:
+                            next.receive_email ||
+                            next.emailEnv?.sender_notification_email ||
+                            a.receive_email ||
+                            "",
+                          email_display_name:
+                            next.email_display_name !== undefined
+                              ? next.email_display_name
+                              : a.email_display_name || "",
+                          emailEnv: {
+                            ...a.emailEnv,
+                            ...next.emailEnv,
+                            sender_notification_email:
+                              next.emailEnv?.sender_notification_email ||
+                              next.receive_email ||
+                              a.emailEnv?.sender_notification_email ||
+                              "",
+                          },
+                        }
+                      : a,
+                  ),
                 );
                 setMessage({
                   type: "ok",
@@ -314,7 +340,18 @@ export function CmsDashboard() {
               }}
               onRemoved={(next) => {
                 setAdmins((prev) =>
-                  prev.map((a) => (a.admin_id === next.admin_id ? next : a)),
+                  prev.map((a) =>
+                    a.admin_id === next.admin_id
+                      ? {
+                          ...a,
+                          ...next,
+                          receive_email:
+                            next.receive_email ||
+                            next.emailEnv?.sender_notification_email ||
+                            "",
+                        }
+                      : a,
+                  ),
                 );
                 setMessage({
                   type: "ok",
@@ -326,7 +363,7 @@ export function CmsDashboard() {
             />
           ) : (
             <div className="flex h-full min-h-[50vh] items-center justify-center px-6 text-center text-[var(--muted)]">
-              {loading ? "Loading…" : "Select an Admin to edit WhatsApp and Email environment."}
+              {loading ? "Loading…" : "Select an Admin to edit templates and Google Sheets."}
             </div>
           )}
         </main>
@@ -349,15 +386,14 @@ function AdminEnvEditor({
   onError: (text: string) => void;
 }) {
   const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>({ ...admin.whatsapp, enabled: false });
-  const [emailEnv, setEmailEnv] = useState<EmailEnv>({ ...admin.emailEnv, enabled: false });
   const [googleSheets, setGoogleSheets] = useState<GoogleSheetsEnv>(admin.googleSheets);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [section, setSection] = useState<
-    "overview" | "whatsapp" | "email" | "templates" | "google"
-  >("overview");
+  const [section, setSection] = useState<"overview" | "whatsapp" | "templates" | "google">(
+    "overview",
+  );
   const [sheetsHealth, setSheetsHealth] = useState<{
     result: GoogleSheetsHealthResult;
     checkedAt: Date;
@@ -365,19 +401,17 @@ function AdminEnvEditor({
 
   useEffect(() => {
     setWhatsapp({ ...admin.whatsapp, enabled: false });
-    setEmailEnv({ ...admin.emailEnv, enabled: false });
     setGoogleSheets(admin.googleSheets);
     setTemplates(admin.templates);
     setSection("overview");
     setSheetsHealth(null);
-  }, [admin]);
+  }, [admin.admin_id]);
 
   const save = async () => {
     setSaving(true);
     try {
       const next = await saveAdminEnv(admin.admin_id, {
         whatsapp: { ...whatsapp, enabled: false },
-        email: { ...emailEnv, enabled: false },
         templates,
         googleSheets,
       });
@@ -392,7 +426,7 @@ function AdminEnvEditor({
   const remove = async () => {
     if (
       !window.confirm(
-        `Remove all CMS WhatsApp, Email, Google Sheets, and template settings for ${displayName(admin)}?\n\nThey will fall back to the server .env until you save again.`,
+        `Remove all CMS WhatsApp, Google Sheets, and template settings for ${displayName(admin)}?\n\nEmail SMTP stays on the server .env. They will fall back to global settings until you save again.`,
       )
     ) {
       return;
@@ -480,13 +514,18 @@ function AdminEnvEditor({
         <div className="flex gap-1 overflow-x-auto">
           {(
             [
-              ["overview", "Environment", false],
-              ["templates", "Templates & preview", false],
-              ["whatsapp", "WhatsApp", Boolean(admin.channel_locks?.whatsapp)],
-              ["email", "Email", Boolean(admin.channel_locks?.email)],
-              ["google", "Google Sheets", Boolean(admin.channel_locks?.google_sheets)],
+              ["overview", "Environment"],
+              ["templates", "Templates & preview"],
+              [
+                "whatsapp",
+                admin.channel_locks?.whatsapp !== false ? "WhatsApp 🔒" : "WhatsApp",
+              ],
+              [
+                "google",
+                admin.channel_locks?.google_sheets ? "Google Sheets 🔒" : "Google Sheets",
+              ],
             ] as const
-          ).map(([id, label, locked]) => (
+          ).map(([id, label]) => (
             <button
               key={id}
               type="button"
@@ -498,11 +537,6 @@ function AdminEnvEditor({
               }`}
             >
               {label}
-              {locked ? (
-                <span className="ml-1.5 text-[11px] font-semibold text-amber-700" title="Locked in the main app">
-                  🔒
-                </span>
-              ) : null}
               {section === id ? (
                 <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--brand)]" />
               ) : null}
@@ -529,13 +563,13 @@ function AdminEnvEditor({
             <FormSection
               title="WhatsApp Cloud API (Meta)"
               enabled={false}
-              locked
+              locked={admin.channel_locks?.whatsapp !== false}
               onEnabledChange={() => undefined}
             >
               <p className="mb-4 text-sm text-[var(--muted)]">
-                Same keys as <code className="text-[var(--ink)]">BusinessCardScanner_Backend/.env</code>.
-                Live WhatsApp send is frozen for this product stage. Credentials can still be stored
-                for later; Test and Enable stay off.
+                Use <strong>Environment</strong> → WhatsApp <strong>Lock / Unlock</strong> to turn
+                WhatsApp off or on for this company in the main app. Credentials below are optional
+                CMS storage; live send still uses server config when unlocked.
               </p>
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
@@ -552,43 +586,6 @@ function AdminEnvEditor({
                     }
                     value={String(whatsapp[key] ?? "")}
                     onChange={(v) => setWhatsapp((w) => ({ ...w, [key]: v, enabled: false }))}
-                  />
-                ))}
-              </div>
-            </FormSection>
-          </div>
-        ) : section === "email" ? (
-          <div className="px-4 py-6 sm:px-6 lg:px-8">
-            <FormSection
-              title="Email environment"
-              enabled={false}
-              locked
-              onEnabledChange={() => undefined}
-            >
-              <p className="mb-4 text-sm text-[var(--muted)]">
-                Live Email send is frozen for this product stage. SMTP settings can still be stored
-                for later; Test and Enable stay off.
-              </p>
-              <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                {EMAIL_INPUT_KEYS.map((key) => (
-                  <Field
-                    key={key}
-                    label={EMAIL_FIELD_LABELS[key] || key}
-                    secret={SECRET_EMAIL.has(key)}
-                    placeholder={
-                      key === "sender_notification_email"
-                        ? "Enter sender notification email"
-                        : undefined
-                    }
-                    hint={
-                      key === "smtp_password" && emailEnv.smtp_password_set
-                        ? "Saved — leave blank to keep"
-                        : key === "sender_notification_email"
-                          ? "Optional. Receives receiver/contact details after a successful send."
-                          : undefined
-                    }
-                    value={String(emailEnv[key] ?? "")}
-                    onChange={(v) => setEmailEnv((em) => ({ ...em, [key]: v, enabled: false }))}
                   />
                 ))}
               </div>

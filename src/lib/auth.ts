@@ -51,6 +51,9 @@ export function clearSession() {
   localStorage.removeItem(ACCESS_KEY);
   localStorage.removeItem(REFRESH_KEY);
   localStorage.removeItem(USER_KEY);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("ncs-cms-auth-cleared"));
+  }
 }
 
 export async function login(identifier: string, password: string): Promise<LoginResponse> {

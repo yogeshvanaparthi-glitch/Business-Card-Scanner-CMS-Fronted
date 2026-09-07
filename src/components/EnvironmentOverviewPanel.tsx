@@ -3,11 +3,16 @@ import {
   checkAdminEnvironment,
   fetchAdminTestUsers,
   formatEnvironmentCheckMessage,
+  saveAdminChannelLocks,
+  saveAdminReceiveEmail,
+  saveAdminEmailDisplayName,
   saveAdminTestUsersLimit,
-  saveChannelLocks,
+  setTenantUserScanEntitlement,
+  DEFAULT_SCAN_CARD_LIMIT,
   type AdminEnvRow,
   type ChannelLocks,
   type EnvironmentCheckResult,
+  type ScanEntitlementMode,
   type TestUsersSummary,
 } from "@/lib/cmsApi";
 
@@ -54,21 +59,34 @@ export function EnvironmentOverviewPanel({
   const [savingLimit, setSavingLimit] = useState(false);
   const [checkingUsers, setCheckingUsers] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [savingPremiumUserId, setSavingPremiumUserId] = useState<string | null>(null);
+  const [customLimitDraft, setCustomLimitDraft] = useState<Record<string, string>>({});
   const [savingLock, setSavingLock] = useState<keyof ChannelLocks | null>(null);
+  const [receiveEmail, setReceiveEmail] = useState(admin.receive_email || "");
+  const [savingReceive, setSavingReceive] = useState(false);
+  const [emailDisplayName, setEmailDisplayName] = useState(admin.email_display_name || "");
+  const [savingDisplayName, setSavingDisplayName] = useState(false);
 
   const env = admin.environment;
+  const locks = admin.channel_locks || {
+    whatsapp: true,
+    email: false,
+    google_sheets: false,
+  };
   const cmsVersion = admin.config_version ?? env?.cms_version ?? 0;
   const projectVersion = admin.project_config_version ?? env?.project_version ?? null;
 
   useEffect(() => {
     setTestLimit(String(admin.test_users_limit ?? 0));
+    setReceiveEmail(admin.receive_email || admin.emailEnv?.sender_notification_email || "");
+    setEmailDisplayName(admin.email_display_name || "");
     setEnvResult(null);
     setLoadingUsers(true);
     void fetchAdminTestUsers(admin.admin_id)
       .then(setTestUsers)
       .catch(() => setTestUsers(null))
       .finally(() => setLoadingUsers(false));
-  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at]);
+  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at, admin.receive_email, admin.emailEnv?.sender_notification_email, admin.email_display_name]);
 
   const runEnvCheck = async () => {
     if (checking) return;
@@ -142,31 +160,118 @@ export function EnvironmentOverviewPanel({
     }
   };
 
-  const setChannelLock = async (key: keyof ChannelLocks, locked: boolean) => {
-    if (savingLock) return;
-    setSavingLock(key);
+  const entitlementLabel = (mode?: ScanEntitlementMode, limit?: number | null) => {
+    if (mode === "unlimited") return "Unlimited";
+    if (mode === "custom" && limit != null) return `${limit} cards`;
+    return `${DEFAULT_SCAN_CARD_LIMIT} cards (default)`;
+  };
+
+  const saveScanEntitlement = async (
+    userId: string,
+    mode: ScanEntitlementMode,
+    limit?: number | null,
+  ) => {
+    if (savingPremiumUserId) return;
+    setSavingPremiumUserId(userId);
     try {
-      const current = admin.channel_locks || {
-        whatsapp: false,
-        email: false,
-        google_sheets: false,
-      };
-      const next = await saveChannelLocks(admin.admin_id, { ...current, [key]: locked });
+      const res = await setTenantUserScanEntitlement(admin.admin_id, userId, mode, limit);
+      setTestUsers(res.users);
+      const email = res.user?.email || userId;
+      onOk(`Scan limit updated for ${email}: ${entitlementLabel(mode, res.user_card_limit ?? limit ?? null)}.`);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to update scan limit");
+    } finally {
+      setSavingPremiumUserId(null);
+    }
+  };
+
+  const onEntitlementSelect = (userId: string, value: string) => {
+    if (value === "default" || value === "unlimited") {
+      void saveScanEntitlement(userId, value);
+      return;
+    }
+    if (value === "500") {
+      void saveScanEntitlement(userId, "custom", 500);
+      return;
+    }
+    if (value === "custom") {
+      setCustomLimitDraft((prev) => ({
+        ...prev,
+        [userId]: prev[userId] ?? "",
+      }));
+    }
+  };
+
+  const toggleChannelLock = async (channel: keyof ChannelLocks) => {
+    if (savingLock) return;
+    const nextLocked = !locks[channel];
+    setSavingLock(channel);
+    try {
+      const next = await saveAdminChannelLocks(admin.admin_id, { [channel]: nextLocked });
       onRefreshAdmin(next);
-      const labels: Record<keyof ChannelLocks, string> = {
-        whatsapp: "WhatsApp",
-        email: "Email",
-        google_sheets: "Google Sheets",
-      };
+      const label =
+        channel === "google_sheets"
+          ? "Google Sheets"
+          : channel === "whatsapp"
+            ? "WhatsApp"
+            : "Email";
       onOk(
-        locked
-          ? `${labels[key]} is locked in the main app. CMS settings are unchanged.`
-          : `${labels[key]} is unlocked in the main app.`,
+        nextLocked
+          ? `🔒 ${label} locked — turned off for this company in the app.`
+          : `✓ ${label} unlocked — available again for this company in the app.`,
       );
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to update channel lock");
     } finally {
       setSavingLock(null);
+    }
+  };
+
+  const saveReceiveEmail = async () => {
+    if (savingReceive) return;
+    const value = receiveEmail.trim();
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      onError("Enter a valid Receive email address.");
+      return;
+    }
+    setSavingReceive(true);
+    try {
+      const next = await saveAdminReceiveEmail(admin.admin_id, value);
+      setReceiveEmail(next.receive_email || value);
+      onRefreshAdmin(next);
+      onOk(
+        value
+          ? `Receive email saved: ${value}`
+          : "Receive email cleared — fallback hierarchy will be used.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Receive email");
+    } finally {
+      setSavingReceive(false);
+    }
+  };
+
+  const saveEmailDisplayName = async () => {
+    if (savingDisplayName) return;
+    const value = emailDisplayName.trim();
+    if (value.length > 255) {
+      onError("Email Display Name must be 255 characters or fewer.");
+      return;
+    }
+    setSavingDisplayName(true);
+    try {
+      const next = await saveAdminEmailDisplayName(admin.admin_id, value);
+      setEmailDisplayName(next.email_display_name ?? value);
+      onRefreshAdmin(next);
+      onOk(
+        value
+          ? `Email Display Name saved: ${value}`
+          : "Email Display Name cleared — default From name will be used.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Email Display Name");
+    } finally {
+      setSavingDisplayName(false);
     }
   };
 
@@ -198,11 +303,6 @@ export function EnvironmentOverviewPanel({
     testUsers?.connected ??
     (testUsers?.users || []).filter((u) => u.connected || u.check_status === "pass").length;
   const totalUsers = testUsers?.total ?? (testUsers?.users || []).length;
-  const locks = admin.channel_locks || {
-    whatsapp: false,
-    email: false,
-    google_sheets: false,
-  };
 
   return (
     <div className="space-y-8 px-4 py-6 sm:px-6 lg:px-8">
@@ -224,51 +324,160 @@ export function EnvironmentOverviewPanel({
           </button>
         </div>
 
-        <p className="mt-5 text-sm text-[var(--muted)]">
-          Lock or Unlock applies immediately to every Admin and User login of this tenant.
-          Freemium clients can use WhatsApp and Email while card scans remain. CMS settings stay
-          editable.
-        </p>
+        <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+          Click <strong>Lock</strong> / <strong>Unlock</strong> on each channel to turn it off or on
+          for this company&apos;s users in the main app. Email SMTP still uses server{" "}
+          <code className="text-[var(--ink)]">.env</code> when unlocked.
+        </div>
 
-        <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-          {(
-            [
-              ["google_sheets", "Google Sheets", sheetsStatusLabel],
-              ["whatsapp", "WhatsApp", ""],
-              ["email", "Email", ""],
-            ] as const
-          ).map(([key, title, extra]) => {
-            const locked = locks[key];
-            return (
-              <div
-                key={key}
-                className={`rounded-md border px-3 py-3 ${
-                  locked
-                    ? "border-amber-200 bg-amber-50"
-                    : "border-emerald-200 bg-emerald-50"
-                }`}
+        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.google_sheets
+                ? "border-amber-200 bg-amber-50"
+                : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <dt className={locks.google_sheets ? "text-amber-800" : "text-emerald-800"}>
+              Google Sheets
+            </dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.google_sheets ? "text-amber-900" : "text-emerald-900"
+              }`}
+            >
+              {locks.google_sheets ? "Locked · No access" : "Has access"}
+              {!locks.google_sheets ? (
+                <span className="ml-2 font-medium">{sheetsStatusLabel}</span>
+              ) : null}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("google_sheets")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
               >
-                <dt className={locked ? "text-amber-800" : "text-emerald-800"}>{title}</dt>
-                <dd
-                  className={`mt-1 font-semibold ${
-                    locked ? "text-amber-900" : "text-emerald-900"
-                  }`}
-                >
-                  {locked ? "Locked in main app" : "Unlocked in main app"}
-                  {extra ? <span className="ml-2 font-medium">{extra}</span> : null}
-                </dd>
-                <button
-                  type="button"
-                  disabled={savingLock === key}
-                  onClick={() => void setChannelLock(key, !locked)}
-                  className="mt-3 rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold hover:bg-slate-50 disabled:opacity-50"
-                >
-                  {savingLock === key ? "Saving…" : locked ? "Unlock" : "Lock"}
-                </button>
-              </div>
-            );
-          })}
+                {savingLock === "google_sheets"
+                  ? "Saving…"
+                  : locks.google_sheets
+                    ? "Unlock"
+                    : "Lock"}
+              </button>
+            </dd>
+          </div>
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.whatsapp ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <dt className={locks.whatsapp ? "text-amber-800" : "text-emerald-800"}>WhatsApp</dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.whatsapp ? "text-amber-900" : "text-emerald-900"
+              }`}
+            >
+              {locks.whatsapp ? "Locked · No access" : "Unlocked · Available"}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("whatsapp")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {savingLock === "whatsapp" ? "Saving…" : locks.whatsapp ? "Unlock" : "Lock"}
+              </button>
+            </dd>
+          </div>
+          <div
+            className={`rounded-md border px-3 py-3 ${
+              locks.email ? "border-amber-200 bg-amber-50" : "border-slate-200 bg-slate-50"
+            }`}
+          >
+            <dt className={locks.email ? "text-amber-800" : "text-slate-700"}>
+              Email (Amazon SES)
+            </dt>
+            <dd
+              className={`mt-1 font-semibold ${
+                locks.email ? "text-amber-900" : "text-slate-900"
+              }`}
+            >
+              {locks.email ? "Locked · No access" : "Unlocked · Server .env"}
+              {!locks.email ? (
+                <span className="ml-2 text-xs font-normal text-slate-600">
+                  INTERNAL + EXTERNAL lanes
+                </span>
+              ) : null}
+            </dd>
+            <dd className="mt-3">
+              <button
+                type="button"
+                disabled={savingLock !== null}
+                onClick={() => void toggleChannelLock("email")}
+                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                {savingLock === "email" ? "Saving…" : locks.email ? "Unlock" : "Lock"}
+              </button>
+            </dd>
+          </div>
         </dl>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Receive email</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Not hardcoded. Whatever you save here is the inbox that receives scanned contact
+              details for this Admin&apos;s company (Admin + User scans). Super Admin scans still
+              use the Super Admin login / SUPERADMIN_EMAIL default.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="email"
+                value={receiveEmail}
+                onChange={(e) => setReceiveEmail(e.target.value)}
+                placeholder="manager@company.com"
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingReceive}
+                onClick={() => void saveReceiveEmail()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingReceive ? "Saving…" : "Save receive email"}
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Email Display Name</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Set the display name that recipients will see when emails are received from this
+              Admin Company. The From email address stays the same.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                value={emailDisplayName}
+                onChange={(e) => setEmailDisplayName(e.target.value)}
+                placeholder={admin.company_name || "ABC Company"}
+                maxLength={255}
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingDisplayName}
+                onClick={() => void saveEmailDisplayName()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingDisplayName ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </label>
+        </div>
 
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
           <div className="rounded-md border border-[var(--line)] px-3 py-3">
@@ -360,14 +569,17 @@ export function EnvironmentOverviewPanel({
             <p className="text-sm font-medium">Integrations</p>
             <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
               {Object.entries(integrationSource).map(([key, val]) => {
-                const channelLocked =
-                  (/whatsapp/i.test(key) && locks.whatsapp) ||
-                  (/(^email$|smtp)/i.test(key) && locks.email) ||
-                  (/google|sheets/i.test(key) && locks.google_sheets);
-                if (channelLocked) {
+                if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
                   return (
                     <li key={key} className="text-amber-800">
                       🔒 {key}: Locked
+                    </li>
+                  );
+                }
+                if (/^email$/i.test(key) || /smtp/i.test(key)) {
+                  return (
+                    <li key={key} className="text-slate-700">
+                      {key}: server .env (not in CMS)
                     </li>
                   );
                 }
@@ -422,8 +634,8 @@ export function EnvironmentOverviewPanel({
           <div>
             <h3 className="text-base font-semibold">Users</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Tenant users for this client. Active means the account is enabled.
-              Connected means they currently have a live app session.
+              Tenant users for this client. Grant premium (unlimited card scans) to selected
+              people only — other users in the same company keep Freemium limits.
             </p>
           </div>
           <button
@@ -491,13 +703,14 @@ export function EnvironmentOverviewPanel({
                 <th className="py-2 pr-4 font-medium">Role</th>
                 <th className="py-2 pr-4 font-medium">Active</th>
                 <th className="py-2 pr-4 font-medium">Connected</th>
+                <th className="py-2 pr-4 font-medium">Scan limit</th>
                 <th className="py-2 font-medium">Last login</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--line)]">
               {(testUsers?.users || []).length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-4 text-[var(--muted)]">
+                  <td colSpan={6} className="py-4 text-[var(--muted)]">
                     {loadingUsers
                       ? "Loading users…"
                       : "No Admin or User accounts under this tenant yet."}
@@ -518,6 +731,82 @@ export function EnvironmentOverviewPanel({
                       {u.connected || u.check_status === "pass"
                         ? "✓ Connected"
                         : "Not connected"}
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <div className="flex min-w-[220px] flex-col gap-2">
+                        <select
+                          className="rounded-md border border-[var(--line)] bg-white px-2 py-1.5 text-xs"
+                          disabled={savingPremiumUserId === u.id}
+                          value={
+                            u.scan_entitlement_mode === "custom" &&
+                            u.user_card_limit != null &&
+                            u.user_card_limit !== 500
+                              ? "custom"
+                              : u.scan_entitlement_mode === "custom" && u.user_card_limit === 500
+                                ? "500"
+                                : u.scan_entitlement_mode || "default"
+                          }
+                          onChange={(e) => onEntitlementSelect(u.id, e.target.value)}
+                        >
+                          <option value="default">{DEFAULT_SCAN_CARD_LIMIT} cards (default)</option>
+                          <option value="unlimited">Unlimited</option>
+                          <option value="500">500 cards</option>
+                          <option value="custom">Custom…</option>
+                        </select>
+                        {(u.scan_entitlement_mode === "custom" &&
+                          u.user_card_limit != null &&
+                          u.user_card_limit !== 500) ||
+                        customLimitDraft[u.id] !== undefined ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              max={100000}
+                              className="w-24 rounded-md border border-[var(--line)] bg-white px-2 py-1 text-xs"
+                              placeholder="Limit"
+                              value={
+                                customLimitDraft[u.id] ??
+                                (u.user_card_limit != null && u.user_card_limit !== 500
+                                  ? String(u.user_card_limit)
+                                  : "")
+                              }
+                              onChange={(e) =>
+                                setCustomLimitDraft((prev) => ({
+                                  ...prev,
+                                  [u.id]: e.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="rounded-md border border-[var(--line)] px-2 py-1 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+                              disabled={savingPremiumUserId === u.id}
+                              onClick={() => {
+                                const n = Number(customLimitDraft[u.id] ?? u.user_card_limit);
+                                if (!Number.isFinite(n) || n < 1) {
+                                  onError("Enter a custom limit of at least 1.");
+                                  return;
+                                }
+                                void saveScanEntitlement(u.id, "custom", Math.floor(n));
+                                setCustomLimitDraft((prev) => {
+                                  const next = { ...prev };
+                                  delete next[u.id];
+                                  return next;
+                                });
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : null}
+                        <span className="text-[11px] text-[var(--muted)]">
+                          {savingPremiumUserId === u.id
+                            ? "Saving…"
+                            : u.scan_entitlement_mode === "custom"
+                              ? `${u.user_cards_used ?? 0} / ${u.user_card_limit ?? "—"} used`
+                              : entitlementLabel(u.scan_entitlement_mode, u.user_card_limit ?? null)}
+                        </span>
+                      </div>
                     </td>
                     <td className="py-2.5">{formatWhen(u.last_login || u.last_test)}</td>
                   </tr>
