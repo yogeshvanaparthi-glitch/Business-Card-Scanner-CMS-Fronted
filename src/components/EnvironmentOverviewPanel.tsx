@@ -97,7 +97,6 @@ export function EnvironmentOverviewPanel({
       const detail = formatEnvironmentCheckMessage(res);
       if (res.success) onOk(detail);
       else onError(detail);
-      // Refresh list metadata (version/sync) from parent reload path:
       onRefreshAdmin({
         ...admin,
         sync_status: res.sync_status || admin.sync_status,
@@ -105,6 +104,15 @@ export function EnvironmentOverviewPanel({
         project_config_version:
           res.versions?.project ?? admin.project_config_version ?? null,
         last_health_at: res.checked_at || admin.last_health_at,
+        last_health: {
+          ...(admin.last_health && typeof admin.last_health === "object"
+            ? admin.last_health
+            : {}),
+          integrations: res.integrations || {},
+          checks: res.checks || {},
+          whatsapp_runtime: res.whatsapp_runtime || null,
+          success: res.success,
+        },
         environment: {
           stored: Boolean(res.configuration?.stored ?? admin.has_settings),
           connected: Boolean(res.success),
@@ -278,9 +286,17 @@ export function EnvironmentOverviewPanel({
   const integ = envResult?.integrations;
   const lastHealthIntegrations =
     admin.last_health && typeof admin.last_health === "object"
-      ? (admin.last_health.integrations as Record<string, { status?: string }> | undefined)
+      ? (admin.last_health.integrations as
+          | Record<string, { status?: string; message?: string }>
+          | undefined)
       : undefined;
   const integrationSource = integ || lastHealthIntegrations || {};
+  const waBridge =
+    envResult?.whatsapp_runtime ||
+    (admin.last_health && typeof admin.last_health === "object"
+      ? (admin.last_health as { whatsapp_runtime?: EnvironmentCheckResult["whatsapp_runtime"] })
+          .whatsapp_runtime
+      : undefined);
   const sheets = admin.googleSheets;
   const sheetsConfigured = Boolean(
     sheets?.google_sheet_id ||
@@ -569,23 +585,24 @@ export function EnvironmentOverviewPanel({
             <p className="text-sm font-medium">Integrations</p>
             <ul className="mt-2 grid gap-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
               {Object.entries(integrationSource).map(([key, val]) => {
-                if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
-                  return (
-                    <li key={key} className="text-amber-800">
-                      🔒 {key}: Locked
-                    </li>
-                  );
-                }
                 if (/^email$/i.test(key) || /smtp/i.test(key)) {
+                  const status = String(
+                    (val as { status?: string; message?: string } | undefined)?.status ||
+                      "disabled",
+                  );
+                  const msg = (val as { message?: string } | undefined)?.message;
                   return (
                     <li key={key} className="text-slate-700">
-                      {key}: server .env (not in CMS)
+                      {key}: {status}
+                      {msg ? ` — ${msg}` : " (server .env)"}
                     </li>
                   );
                 }
                 const status = String(
-                  (val as { status?: string } | undefined)?.status || "disabled",
+                  (val as { status?: string; message?: string } | undefined)?.status ||
+                    "disabled",
                 );
+                const msg = (val as { message?: string } | undefined)?.message;
                 const ok =
                   status === "pass" ? true : status === "fail" ? false : null;
                 const label =
@@ -599,10 +616,35 @@ export function EnvironmentOverviewPanel({
                 return (
                   <li key={key}>
                     <StatusMark ok={ok} label={`${key}: ${label}`} />
+                    {msg ? (
+                      <span className="mt-0.5 block text-xs text-[var(--muted)]">{msg}</span>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
+            {waBridge ? (
+              <div
+                className={`mt-4 rounded-md border px-3 py-3 text-sm ${
+                  waBridge.uses_cms_credentials && !waBridge.channel_locked
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <p className="font-semibold">WhatsApp ↔ main app</p>
+                <ul className="mt-1 list-inside list-disc text-xs">
+                  <li>
+                    CMS credentials used at send time:{" "}
+                    {waBridge.uses_cms_credentials ? "yes" : "no (server .env fallback)"}
+                  </li>
+                  <li>Channel locked: {waBridge.channel_locked ? "yes" : "no"}</li>
+                  <li>
+                    Credentials complete: {waBridge.credentials_complete ? "yes" : "no"}
+                  </li>
+                  {waBridge.template ? <li>Template: {waBridge.template}</li> : null}
+                </ul>
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="mt-4 text-sm text-[var(--muted)]">

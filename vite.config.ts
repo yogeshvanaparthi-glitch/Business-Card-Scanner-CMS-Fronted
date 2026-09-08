@@ -20,6 +20,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
+        "/assets": { target: apiTarget, changeOrigin: true },
         "/health": { target: apiTarget, changeOrigin: true },
         "/integrations": { target: apiTarget, changeOrigin: true },
       },

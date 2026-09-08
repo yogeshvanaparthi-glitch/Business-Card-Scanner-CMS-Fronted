@@ -1,4 +1,5 @@
 import { EnvironmentOverviewPanel } from "@/components/EnvironmentOverviewPanel";
+import { WhatsAppSetupPanel } from "@/components/WhatsAppSetupPanel";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
@@ -15,19 +16,24 @@ import {
   REVIEW_FIELD_OPTIONS,
   removeAdminEnv,
   removeCmsClient,
+  saveAdminChannelLocks,
   saveAdminEnv,
   SECRET_GOOGLE_SHEETS,
   SECRET_WHATSAPP,
   testAdminGoogleSheets,
+  testAdminWhatsApp,
   WHATSAPP_FIELD_LABELS,
   WHATSAPP_HEADER_FORMATS,
   WHATSAPP_INPUT_KEYS,
+  emptyWhatsAppHeaderMediaItem,
+  syncWhatsAppHeaderMedia,
   type AdminEnvRow,
   type GoogleSheetsEnv,
   type GoogleSheetsHealthResult,
   type TemplateEnv,
   type WhatsAppEnv,
   type WhatsAppHeaderFormat,
+  type WhatsAppHeaderMediaItem,
 } from "@/lib/cmsApi";
 
 export function CmsDashboard() {
@@ -385,12 +391,17 @@ function AdminEnvEditor({
   onOk: (text: string) => void;
   onError: (text: string) => void;
 }) {
-  const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>({ ...admin.whatsapp, enabled: false });
+  const [whatsapp, setWhatsapp] = useState<WhatsAppEnv>({
+    ...admin.whatsapp,
+    enabled: Boolean(admin.whatsapp?.enabled),
+  });
   const [googleSheets, setGoogleSheets] = useState<GoogleSheetsEnv>(admin.googleSheets);
   const [templates, setTemplates] = useState<TemplateEnv>(admin.templates);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [togglingWhatsApp, setTogglingWhatsApp] = useState(false);
+  const [testPhone, setTestPhone] = useState("");
   const [section, setSection] = useState<"overview" | "whatsapp" | "templates" | "google">(
     "overview",
   );
@@ -400,19 +411,26 @@ function AdminEnvEditor({
   } | null>(null);
 
   useEffect(() => {
-    setWhatsapp({ ...admin.whatsapp, enabled: false });
+    setWhatsapp({
+      ...admin.whatsapp,
+      enabled: Boolean(admin.whatsapp?.enabled) && admin.channel_locks?.whatsapp !== true,
+    });
     setGoogleSheets(admin.googleSheets);
     setTemplates(admin.templates);
+  }, [admin.admin_id, admin.whatsapp, admin.googleSheets, admin.templates, admin.channel_locks?.whatsapp]);
+
+  useEffect(() => {
     setSection("overview");
     setSheetsHealth(null);
+    setTestPhone("");
   }, [admin.admin_id]);
 
   const save = async () => {
     setSaving(true);
     try {
       const next = await saveAdminEnv(admin.admin_id, {
-        whatsapp: { ...whatsapp, enabled: false },
-        templates,
+        whatsapp: { ...whatsapp, enabled: Boolean(whatsapp.enabled) },
+        templates: syncWhatsAppHeaderMedia(templates),
         googleSheets,
       });
       onSaved(next);
@@ -420,6 +438,36 @@ function AdminEnvEditor({
       onError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onWhatsAppEnabledChange = async (enabled: boolean) => {
+    if (togglingWhatsApp || saving) return;
+    const previous = Boolean(whatsapp.enabled);
+    setWhatsapp((w) => ({ ...w, enabled }));
+    setTogglingWhatsApp(true);
+    try {
+      // Mirror Environment Lock/Unlock: enable → unlock, disable → lock.
+      const lockedRow = await saveAdminChannelLocks(admin.admin_id, { whatsapp: !enabled });
+      const saved = await saveAdminEnv(admin.admin_id, {
+        whatsapp: { ...whatsapp, enabled },
+        templates: syncWhatsAppHeaderMedia(templates),
+        googleSheets,
+      });
+      onSaved({
+        ...saved,
+        channel_locks: lockedRow.channel_locks ?? saved.channel_locks,
+      });
+      onOk(
+        enabled
+          ? "✓ WhatsApp enabled — unlocked for this company and CMS credentials are active."
+          : "WhatsApp disabled — locked for this company; live send falls back to server .env.",
+      );
+    } catch (err) {
+      setWhatsapp((w) => ({ ...w, enabled: previous }));
+      onError(err instanceof Error ? err.message : "Failed to update WhatsApp enable state");
+    } finally {
+      setTogglingWhatsApp(false);
     }
   };
 
@@ -467,6 +515,35 @@ function AdminEnvEditor({
       const checkedAt = new Date();
       setSheetsHealth({ result: failed, checkedAt });
       onError(formatGoogleSheetsHealthMessage(failed, checkedAt));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const runWhatsAppTest = async () => {
+    const phone = testPhone.trim();
+    if (!phone) {
+      onError("Enter a phone number with country code (e.g. +6598325260).");
+      return;
+    }
+    setTesting(true);
+    try {
+      const res = await testAdminWhatsApp(admin.admin_id, phone, whatsapp);
+      onOk(
+        [
+          "✓ WhatsApp test sent",
+          "",
+          `To: ${res.to || phone}`,
+          res.template ? `Template: ${res.template}` : null,
+          res.language ? `Language: ${res.language}` : null,
+          res.message_id ? `Message ID: ${res.message_id}` : null,
+          res.message ? res.message : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "WhatsApp test failed");
     } finally {
       setTesting(false);
     }
@@ -562,15 +639,23 @@ function AdminEnvEditor({
           <div className="px-4 py-6 sm:px-6 lg:px-8">
             <FormSection
               title="WhatsApp Cloud API (Meta)"
-              enabled={false}
-              locked={admin.channel_locks?.whatsapp !== false}
-              onEnabledChange={() => undefined}
+              enabled={Boolean(whatsapp.enabled)}
+              onEnabledChange={(enabled) => void onWhatsAppEnabledChange(enabled)}
             >
               <p className="mb-4 text-sm text-[var(--muted)]">
-                Use <strong>Environment</strong> → WhatsApp <strong>Lock / Unlock</strong> to turn
-                WhatsApp off or on for this company in the main app. Credentials below are optional
-                CMS storage; live send still uses server config when unlocked.
+                Use the <strong>Enabled</strong> switch to turn WhatsApp on or off for this company.
+                When enabled, CMS credentials below are used for live sends; when disabled, WhatsApp
+                is locked in the app and live send falls back to server{" "}
+                <code className="text-[var(--ink)]">.env</code>. You can also Lock / Unlock from{" "}
+                <strong>Environment</strong>.
+                {togglingWhatsApp ? " Saving…" : ""}
               </p>
+              <WhatsAppSetupPanel
+                adminId={admin.admin_id}
+                whatsapp={whatsapp}
+                onOk={onOk}
+                onError={onError}
+              />
               <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                 {WHATSAPP_INPUT_KEYS.map((key) => (
                   <Field
@@ -585,9 +670,37 @@ function AdminEnvEditor({
                           : undefined
                     }
                     value={String(whatsapp[key] ?? "")}
-                    onChange={(v) => setWhatsapp((w) => ({ ...w, [key]: v, enabled: false }))}
+                    onChange={(v) => setWhatsapp((w) => ({ ...w, [key]: v }))}
                   />
                 ))}
+              </div>
+
+              <div className="mt-6 border-t border-[var(--line)] pt-5">
+                <p className="text-sm font-medium text-[var(--ink)]">Send test message</p>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  Sends the approved thank-you template to this number using the credentials above
+                  (unsaved values included; blank secrets keep saved ones).
+                </p>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <label className="block min-w-0 flex-1 text-sm">
+                    <span className="mb-1.5 block font-medium">Test phone number</span>
+                    <input
+                      type="tel"
+                      value={testPhone}
+                      onChange={(e) => setTestPhone(e.target.value)}
+                      placeholder="+65 9832 5260"
+                      className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={testing || saving}
+                    onClick={() => void runWhatsAppTest()}
+                    className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-5 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+                  >
+                    {testing ? "Sending…" : "Send test message"}
+                  </button>
+                </div>
               </div>
             </FormSection>
           </div>
@@ -671,6 +784,39 @@ function TemplatesWorkspace({
       .catch(() => setShell(""));
   }, []);
 
+  const mediaItems =
+    templates.whatsapp_header_media?.length > 0
+      ? templates.whatsapp_header_media
+      : [
+          {
+            format: templates.whatsapp_header_format,
+            text: templates.whatsapp_header,
+            media_url: templates.whatsapp_header_media_url,
+            media_filename: templates.whatsapp_header_media_filename,
+          },
+        ];
+
+  const updateMediaItem = (index: number, patch: Partial<WhatsAppHeaderMediaItem>) => {
+    const next = mediaItems.map((item, i) => (i === index ? { ...item, ...patch } : item));
+    onChange(syncWhatsAppHeaderMedia({ ...templates, whatsapp_header_media: next }));
+  };
+
+  const addMediaItem = () => {
+    if (mediaItems.length >= 5) return;
+    onChange(
+      syncWhatsAppHeaderMedia({
+        ...templates,
+        whatsapp_header_media: [...mediaItems, emptyWhatsAppHeaderMediaItem()],
+      }),
+    );
+  };
+
+  const removeMediaItem = (index: number) => {
+    if (mediaItems.length <= 1) return;
+    const next = mediaItems.filter((_, i) => i !== index);
+    onChange(syncWhatsAppHeaderMedia({ ...templates, whatsapp_header_media: next }));
+  };
+
   const waPreview = [
     templates.whatsapp_header,
     applyTemplateVars(templates.whatsapp_body, templates),
@@ -720,90 +866,121 @@ function TemplatesWorkspace({
             <p className="text-sm font-medium">WhatsApp message template</p>
             <p className="mt-0.5 text-xs text-[var(--muted)]">
               Same structure as Meta Developer: Header (None / Text / Photo / Video / Brochure),
-              Body, Footer, optional URL button. Template name and language for production sends
-              are configured in the backend environment, not in this CMS form. Header media URL must be publicly reachable (Meta downloads it).
+              Body, Footer, optional URL button. Add multiple media samples with +. Meta sends use
+              the first non-None header. Header media URL must be publicly reachable (Meta downloads
+              it).
             </p>
           </div>
 
           <div className="rounded-lg border border-[var(--line)] bg-white p-4 shadow-sm">
-            <p className="mb-3 text-sm font-semibold">Header (optional)</p>
-            <label className="block text-sm">
-              <span className="mb-1.5 block font-medium">Media sample / header type</span>
-              <select
-                className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-                value={templates.whatsapp_header_format}
-                onChange={(e) =>
-                  onChange({
-                    ...templates,
-                    whatsapp_header_format: e.target.value as WhatsAppHeaderFormat,
-                  })
-                }
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Header (optional)</p>
+              <button
+                type="button"
+                onClick={addMediaItem}
+                disabled={mediaItems.length >= 5}
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--brand)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-40"
               >
-                {WHATSAPP_HEADER_FORMATS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                + Add media
+              </button>
+            </div>
 
-            {templates.whatsapp_header_format === "TEXT" ? (
-              <label className="mt-3 block text-sm">
-                <span className="mb-1.5 block font-medium">Header text</span>
-                <input
-                  className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-                  value={templates.whatsapp_header}
-                  onChange={(e) => onChange({ ...templates, whatsapp_header: e.target.value })}
-                  placeholder="CardScan Message"
-                />
-              </label>
-            ) : null}
+            <div className="space-y-4">
+              {mediaItems.map((item, index) => (
+                <div
+                  key={`wa-media-${index}`}
+                  className="rounded-md border border-[var(--line)] bg-slate-50/60 p-3"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+                      Media {index + 1}
+                      {index === 0 ? " · primary (sent)" : ""}
+                    </p>
+                    {mediaItems.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => removeMediaItem(index)}
+                        className="text-xs font-semibold text-[var(--danger)] hover:underline"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
 
-            {templates.whatsapp_header_format === "IMAGE" ||
-            templates.whatsapp_header_format === "VIDEO" ||
-            templates.whatsapp_header_format === "DOCUMENT" ? (
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <label className="block text-sm sm:col-span-2">
-                  <span className="mb-1.5 block font-medium">
-                    {templates.whatsapp_header_format === "IMAGE"
-                      ? "Photo / image URL"
-                      : templates.whatsapp_header_format === "VIDEO"
-                        ? "Video URL"
-                        : "Brochure / PDF document URL"}
-                  </span>
-                  <input
-                    className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-                    value={templates.whatsapp_header_media_url}
-                    onChange={(e) =>
-                      onChange({ ...templates, whatsapp_header_media_url: e.target.value })
-                    }
-                    placeholder={
-                      templates.whatsapp_header_format === "DOCUMENT"
-                        ? "https://…/brochure.pdf"
-                        : templates.whatsapp_header_format === "VIDEO"
-                          ? "https://…/intro.mp4"
-                          : "https://…/photo.jpg"
-                    }
-                  />
-                </label>
-                {templates.whatsapp_header_format === "DOCUMENT" ? (
-                  <label className="block text-sm sm:col-span-2">
-                    <span className="mb-1.5 block font-medium">Document filename</span>
-                    <input
+                  <label className="block text-sm">
+                    <span className="mb-1.5 block font-medium">Media sample / header type</span>
+                    <select
                       className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-                      value={templates.whatsapp_header_media_filename}
+                      value={item.format}
                       onChange={(e) =>
-                        onChange({
-                          ...templates,
-                          whatsapp_header_media_filename: e.target.value,
+                        updateMediaItem(index, {
+                          format: e.target.value as WhatsAppHeaderFormat,
                         })
                       }
-                      placeholder="brochure.pdf"
-                    />
+                    >
+                      {WHATSAPP_HEADER_FORMATS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                ) : null}
-              </div>
-            ) : null}
+
+                  {item.format === "TEXT" ? (
+                    <label className="mt-3 block text-sm">
+                      <span className="mb-1.5 block font-medium">Header text</span>
+                      <input
+                        className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                        value={item.text}
+                        onChange={(e) => updateMediaItem(index, { text: e.target.value })}
+                        placeholder="CardScan Message"
+                      />
+                    </label>
+                  ) : null}
+
+                  {item.format === "IMAGE" ||
+                  item.format === "VIDEO" ||
+                  item.format === "DOCUMENT" ? (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block text-sm sm:col-span-2">
+                        <span className="mb-1.5 block font-medium">
+                          {item.format === "IMAGE"
+                            ? "Photo / image URL"
+                            : item.format === "VIDEO"
+                              ? "Video URL"
+                              : "Brochure / PDF document URL"}
+                        </span>
+                        <input
+                          className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                          value={item.media_url}
+                          onChange={(e) => updateMediaItem(index, { media_url: e.target.value })}
+                          placeholder={
+                            item.format === "DOCUMENT"
+                              ? "https://…/brochure.pdf"
+                              : item.format === "VIDEO"
+                                ? "https://…/intro.mp4"
+                                : "https://…/photo.jpg"
+                          }
+                        />
+                      </label>
+                      {item.format === "DOCUMENT" ? (
+                        <label className="block text-sm sm:col-span-2">
+                          <span className="mb-1.5 block font-medium">Document filename</span>
+                          <input
+                            className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                            value={item.media_filename}
+                            onChange={(e) =>
+                              updateMediaItem(index, { media_filename: e.target.value })
+                            }
+                            placeholder="brochure.pdf"
+                          />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           </div>
 
           <label className="block text-sm">
@@ -907,22 +1084,35 @@ function TemplatesWorkspace({
               </div>
               <div className="min-h-[280px] bg-[#0b141a] px-3 py-4">
                 <div className="max-w-[85%] rounded-lg rounded-tl-none bg-[#005c4b] px-3 py-2 text-[13px] leading-snug whitespace-pre-wrap text-white shadow">
-                  {templates.whatsapp_header_format !== "NONE" ? (
-                    <div className="mb-2 overflow-hidden rounded bg-black/25 px-2 py-3 text-center text-[11px] text-white/80">
-                      {templates.whatsapp_header_format === "TEXT"
-                        ? applyTemplateVars(templates.whatsapp_header, templates) || "Header text"
-                        : templates.whatsapp_header_format === "IMAGE"
-                          ? "📷 Photo header"
-                          : templates.whatsapp_header_format === "VIDEO"
-                            ? "🎬 Video header"
-                            : "📄 Brochure / PDF header"}
-                      {templates.whatsapp_header_media_url ? (
-                        <p className="mt-1 truncate text-[10px] text-white/50">
-                          {templates.whatsapp_header_media_url}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : null}
+                  {(templates.whatsapp_header_media?.length
+                    ? templates.whatsapp_header_media
+                    : [
+                        {
+                          format: templates.whatsapp_header_format,
+                          text: templates.whatsapp_header,
+                          media_url: templates.whatsapp_header_media_url,
+                          media_filename: templates.whatsapp_header_media_filename,
+                        },
+                      ]
+                  )
+                    .filter((m) => m.format && m.format !== "NONE")
+                    .map((m, i) => (
+                      <div
+                        key={`prev-media-${i}`}
+                        className="mb-2 overflow-hidden rounded bg-black/25 px-2 py-3 text-center text-[11px] text-white/80"
+                      >
+                        {m.format === "TEXT"
+                          ? applyTemplateVars(m.text, templates) || "Header text"
+                          : m.format === "IMAGE"
+                            ? "📷 Photo header"
+                            : m.format === "VIDEO"
+                              ? "🎬 Video header"
+                              : "📄 Brochure / PDF header"}
+                        {m.media_url ? (
+                          <p className="mt-1 truncate text-[10px] text-white/50">{m.media_url}</p>
+                        ) : null}
+                      </div>
+                    ))}
                   {waPreview || (
                     <span className="italic text-white/60">Type WhatsApp content…</span>
                   )}

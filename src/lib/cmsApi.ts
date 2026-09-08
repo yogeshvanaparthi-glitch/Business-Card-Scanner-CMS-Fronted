@@ -45,6 +45,14 @@ export type GoogleSheetsEnv = {
 
 export type WhatsAppHeaderFormat = "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
 
+/** One CMS header / media sample row (Meta send uses the first non-NONE row). */
+export type WhatsAppHeaderMediaItem = {
+  format: WhatsAppHeaderFormat;
+  text: string;
+  media_url: string;
+  media_filename: string;
+};
+
 export type TemplateEnv = {
   email_subject: string;
   email_body: string;
@@ -52,6 +60,8 @@ export type TemplateEnv = {
   whatsapp_header: string;
   whatsapp_header_media_url: string;
   whatsapp_header_media_filename: string;
+  /** Extra / multiple media samples. Index 0 mirrors the legacy single-header fields. */
+  whatsapp_header_media: WhatsAppHeaderMediaItem[];
   whatsapp_body: string;
   whatsapp_footer: string;
   whatsapp_button_text: string;
@@ -152,6 +162,13 @@ export type EnvironmentCheckResult = {
     stored?: boolean;
     status?: string;
     updated_at?: string | null;
+  };
+  whatsapp_runtime?: {
+    enabled_flag?: boolean;
+    channel_locked?: boolean;
+    credentials_complete?: boolean;
+    uses_cms_credentials?: boolean;
+    template?: string | null;
   };
 };
 
@@ -304,6 +321,14 @@ export const EMPTY_TEMPLATES: TemplateEnv = {
   whatsapp_header: "CardScan Message",
   whatsapp_header_media_url: "",
   whatsapp_header_media_filename: "brochure.pdf",
+  whatsapp_header_media: [
+    {
+      format: "NONE",
+      text: "CardScan Message",
+      media_url: "",
+      media_filename: "brochure.pdf",
+    },
+  ],
   whatsapp_body:
     "Hello {{1}},\nThank you for sharing your business card details.\nYour contact information has been received successfully.\nWe will get back to you regarding the details provided — {{5}}.\nThank you",
   whatsapp_footer: "Thank you",
@@ -317,6 +342,60 @@ export const EMPTY_TEMPLATES: TemplateEnv = {
   preview_signoff: "B2B Team",
   token_map: { ...DEFAULT_TOKEN_MAP },
 };
+
+export function emptyWhatsAppHeaderMediaItem(): WhatsAppHeaderMediaItem {
+  return {
+    format: "NONE",
+    text: "",
+    media_url: "",
+    media_filename: "brochure.pdf",
+  };
+}
+
+function parseHeaderFormat(raw: unknown, fallback: WhatsAppHeaderFormat = "NONE"): WhatsAppHeaderFormat {
+  const fmtRaw = String(raw ?? fallback).trim().toUpperCase();
+  return (["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"] as const).includes(
+    fmtRaw as WhatsAppHeaderFormat,
+  )
+    ? (fmtRaw as WhatsAppHeaderFormat)
+    : fallback;
+}
+
+function asHeaderMediaItem(raw: unknown): WhatsAppHeaderMediaItem {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    format: parseHeaderFormat(o.format ?? o.whatsapp_header_format, "NONE"),
+    text: String(o.text ?? o.whatsapp_header ?? ""),
+    media_url: String(o.media_url ?? o.whatsapp_header_media_url ?? ""),
+    media_filename: String(
+      o.media_filename ?? o.whatsapp_header_media_filename ?? "brochure.pdf",
+    ),
+  };
+}
+
+/** Normalize media list and keep legacy single-header fields in sync with row 0. */
+export function syncWhatsAppHeaderMedia(templates: TemplateEnv): TemplateEnv {
+  const list =
+    Array.isArray(templates.whatsapp_header_media) && templates.whatsapp_header_media.length > 0
+      ? templates.whatsapp_header_media.map(asHeaderMediaItem)
+      : [
+          {
+            format: templates.whatsapp_header_format || "NONE",
+            text: templates.whatsapp_header || "",
+            media_url: templates.whatsapp_header_media_url || "",
+            media_filename: templates.whatsapp_header_media_filename || "brochure.pdf",
+          },
+        ];
+  const primary = list[0];
+  return {
+    ...templates,
+    whatsapp_header_media: list,
+    whatsapp_header_format: primary.format,
+    whatsapp_header: primary.text,
+    whatsapp_header_media_url: primary.media_url,
+    whatsapp_header_media_filename: primary.media_filename,
+  };
+}
 
 function asWhatsApp(raw: unknown): WhatsAppEnv {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -342,15 +421,21 @@ function asWhatsApp(raw: unknown): WhatsAppEnv {
       o.template_language_code ?? o.language ?? EMPTY_WHATSAPP.template_language_code,
     ),
     business_card_template_name: String(
-      o.business_card_template_name ?? EMPTY_WHATSAPP.business_card_template_name,
+      o.business_card_template_name ||
+        o.template_name ||
+        EMPTY_WHATSAPP.business_card_template_name,
     ),
     card_received_template_name: String(
-      o.card_received_template_name ??
-        o.card_received_template ??
+      o.card_received_template_name ||
+        o.card_received_template ||
+        o.template_name ||
         EMPTY_WHATSAPP.card_received_template_name,
     ),
     scan_template_name: String(
-      o.scan_template_name ?? o.scan_template ?? EMPTY_WHATSAPP.scan_template_name,
+      o.scan_template_name ||
+        o.scan_template ||
+        o.template_name ||
+        EMPTY_WHATSAPP.scan_template_name,
     ),
     enabled: Boolean(o.enabled),
   };
@@ -411,23 +496,32 @@ function normalizeTokenMap(raw: unknown): Record<string, string> {
 
 function asTemplates(raw: unknown): TemplateEnv {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const fmtRaw = String(o.whatsapp_header_format ?? EMPTY_TEMPLATES.whatsapp_header_format)
-    .trim()
-    .toUpperCase();
-  const fmt: WhatsAppHeaderFormat = (
-    ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"] as const
-  ).includes(fmtRaw as WhatsAppHeaderFormat)
-    ? (fmtRaw as WhatsAppHeaderFormat)
-    : "NONE";
-  return {
-    email_subject: String(o.email_subject ?? EMPTY_TEMPLATES.email_subject),
-    email_body: String(o.email_body ?? ""),
-    whatsapp_header_format: fmt,
-    whatsapp_header: String(o.whatsapp_header ?? EMPTY_TEMPLATES.whatsapp_header),
-    whatsapp_header_media_url: String(o.whatsapp_header_media_url ?? ""),
-    whatsapp_header_media_filename: String(
+  const fmt = parseHeaderFormat(
+    o.whatsapp_header_format ?? EMPTY_TEMPLATES.whatsapp_header_format,
+    "NONE",
+  );
+  const legacyPrimary: WhatsAppHeaderMediaItem = {
+    format: fmt,
+    text: String(o.whatsapp_header ?? EMPTY_TEMPLATES.whatsapp_header),
+    media_url: String(o.whatsapp_header_media_url ?? ""),
+    media_filename: String(
       o.whatsapp_header_media_filename ?? EMPTY_TEMPLATES.whatsapp_header_media_filename,
     ),
+  };
+  const mediaRaw = Array.isArray(o.whatsapp_header_media) ? o.whatsapp_header_media : null;
+  const mediaList =
+    mediaRaw && mediaRaw.length > 0
+      ? mediaRaw.map(asHeaderMediaItem)
+      : [legacyPrimary];
+
+  return syncWhatsAppHeaderMedia({
+    email_subject: String(o.email_subject ?? EMPTY_TEMPLATES.email_subject),
+    email_body: String(o.email_body ?? ""),
+    whatsapp_header_format: mediaList[0].format,
+    whatsapp_header: mediaList[0].text,
+    whatsapp_header_media_url: mediaList[0].media_url,
+    whatsapp_header_media_filename: mediaList[0].media_filename,
+    whatsapp_header_media: mediaList,
     whatsapp_body: String(o.whatsapp_body ?? EMPTY_TEMPLATES.whatsapp_body),
     whatsapp_footer: String(o.whatsapp_footer ?? EMPTY_TEMPLATES.whatsapp_footer),
     whatsapp_button_text: String(o.whatsapp_button_text ?? ""),
@@ -439,7 +533,7 @@ function asTemplates(raw: unknown): TemplateEnv {
     preview_website: String(o.preview_website ?? EMPTY_TEMPLATES.preview_website),
     preview_signoff: String(o.preview_signoff ?? EMPTY_TEMPLATES.preview_signoff),
     token_map: normalizeTokenMap(o.token_map),
-  };
+  });
 }
 
 export const WHATSAPP_HEADER_FORMATS: { value: WhatsAppHeaderFormat; label: string }[] = [
@@ -493,7 +587,12 @@ export function applyTemplateVars(text: string, t: TemplateEnv): string {
 export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEnv): string {
   const filledBody = applyTemplateVars(body, t);
   const filledShell = applyTemplateVars(shell, t).replaceAll("{{BODY_HTML}}", filledBody);
-  return filledShell;
+  // In CMS iframe preview, load assets from the local API (/assets proxy) so
+  // images work before they are deployed to api.namecardscan.com.
+  return filledShell.replaceAll(
+    "https://api.namecardscan.com/assets/",
+    "/assets/",
+  );
 }
 
 export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow {
@@ -621,7 +720,10 @@ export async function saveAdminEnv(
     {
       method: "PUT",
       body: JSON.stringify({
-        whatsapp: { ...payload.whatsapp, enabled: false },
+        whatsapp: {
+          ...payload.whatsapp,
+          enabled: Boolean(payload.whatsapp.enabled),
+        },
         templates: payload.templates,
         google_sheets: {
           ...payload.googleSheets,
@@ -871,12 +973,6 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
   };
   const integrations = res.integrations || {};
   const integLines = Object.entries(integrations).map(([key, val]) => {
-    if (/^whatsapp$/i.test(key) || /whatsapp/i.test(key)) {
-      return `${key}: 🔒 locked`;
-    }
-    if (/^email$/i.test(key) || /smtp/i.test(key)) {
-      return `${key}: server .env`;
-    }
     const status = String(val?.status || "disabled");
     const mark =
       status === "pass"
@@ -885,9 +981,14 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
           ? "✕"
           : status === "warn"
             ? "!"
-            : "–";
-    return `${key}: ${mark} ${status}`;
+            : status === "disabled"
+              ? "○"
+              : "–";
+    const extra = val?.message ? ` — ${val.message}` : "";
+    return `${key}: ${mark} ${status}${extra}`;
   });
+
+  const waRuntime = res.whatsapp_runtime;
 
   if (res.success) {
     return [
@@ -900,12 +1001,25 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
       `Project Version: ${res.versions?.project ?? "—"}`,
       "Environment Health: ✓ Healthy",
       "",
-      "Channel access: Google Sheets (CMS) + Email SMTP (server .env). WhatsApp locked.",
+      "Integrations:",
       ...integLines,
+      waRuntime
+        ? [
+            "",
+            "WhatsApp → main app bridge:",
+            `  Uses CMS credentials: ${waRuntime.uses_cms_credentials ? "✓ yes" : "✕ no (falls back to server .env)"}`,
+            `  Channel locked: ${waRuntime.channel_locked ? "yes" : "no"}`,
+            waRuntime.template ? `  Template: ${waRuntime.template}` : null,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : null,
       "",
       "Environment data is stored in CMS and successfully connected to the project environment.",
       `Last Checked: ${stamp}`,
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 
   return [
@@ -915,6 +1029,12 @@ export function formatEnvironmentCheckMessage(res: EnvironmentCheckResult): stri
     checkLine("Configuration loaded", res.checks?.configurationLoaded),
     checkLine("Backend reachable", res.checks?.backendReachable),
     checkLine("Environment synchronized", res.checks?.environmentSynchronized),
+    checkLine("WhatsApp credentials complete", res.checks?.whatsappCredentialsComplete),
+    checkLine("WhatsApp channel unlocked", res.checks?.whatsappChannelUnlocked),
+    checkLine("WhatsApp uses CMS at runtime", res.checks?.whatsappRuntimeUsesCms),
+    "",
+    integLines.length ? "Integrations:" : null,
+    ...integLines,
     "",
     `Reason: ${res.reason || res.message || "Connection failed."}`,
     res.action ? `Action: ${res.action}` : "",
