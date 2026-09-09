@@ -1,4 +1,5 @@
 import { apiJson } from "@/lib/auth";
+import { getApiBase } from "@/lib/api";
 
 export type WhatsAppEnv = {
   app_id: string;
@@ -591,12 +592,47 @@ export function applyTemplateVars(text: string, t: TemplateEnv): string {
 export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEnv): string {
   const filledBody = applyTemplateVars(body, t);
   const filledShell = applyTemplateVars(shell, t).replaceAll("{{BODY_HTML}}", filledBody);
-  // In CMS iframe preview, load assets from the local API (/assets proxy) so
-  // images work before they are deployed to api.namecardscan.com.
-  return filledShell.replaceAll(
-    "https://api.namecardscan.com/assets/",
-    "/assets/",
-  );
+  // Dev: Vite proxies /assets → local API.
+  // Production CMS (Amplify) has no /assets proxy — keep/resolve absolute API URLs.
+  if (import.meta.env.DEV) {
+    return filledShell.replaceAll("https://api.namecardscan.com/assets/", "/assets/");
+  }
+  const api = (getApiBase() || "https://api.namecardscan.com").replace(/\/$/, "");
+  if (api === "https://api.namecardscan.com") {
+    return filledShell;
+  }
+  return filledShell.replaceAll("https://api.namecardscan.com/assets/", `${api}/assets/`);
+}
+
+/**
+ * Browser URL for an /assets/... file in CMS UI (media thumbs + email iframe).
+ * Dev uses the Vite `/assets` proxy; production uses the API host directly.
+ */
+export function resolveAssetsPreviewUrl(urlOrPath: string): string {
+  const raw = String(urlOrPath || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:") || raw.startsWith("cid:")) return raw;
+
+  const normalized = raw.replace(/\\/g, "/");
+  const marker = "/assets/";
+  const idx = normalized.indexOf(marker);
+  const assetPath =
+    idx !== -1
+      ? normalized.slice(idx)
+      : normalized.startsWith("/")
+        ? normalized
+        : "";
+
+  if (!assetPath) {
+    return raw;
+  }
+
+  if (import.meta.env.DEV) {
+    return assetPath;
+  }
+
+  const api = (getApiBase() || "https://api.namecardscan.com").replace(/\/$/, "");
+  return `${api}${assetPath}`;
 }
 
 export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow {

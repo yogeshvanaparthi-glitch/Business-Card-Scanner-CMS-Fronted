@@ -3,6 +3,7 @@ import {
   deleteCmsMedia,
   emailImgTag,
   fetchCmsMedia,
+  resolveAssetsPreviewUrl,
   uploadCmsMedia,
   type CmsMediaItem,
 } from "@/lib/cmsApi";
@@ -22,13 +23,11 @@ function formatBytes(size: number): string {
 }
 
 function previewSrc(item: CmsMediaItem): string {
-  // Prefer same-origin /assets path so Vite proxy serves local uploads in preview.
-  const url = item.url || "";
-  const marker = "/assets/";
-  const idx = url.indexOf(marker);
-  if (idx !== -1) return url.slice(idx);
-  if (item.relative_path) return `/assets/${item.relative_path.replace(/^\/+/, "")}`;
-  return url;
+  if (item.url) return resolveAssetsPreviewUrl(item.url);
+  if (item.relative_path) {
+    return resolveAssetsPreviewUrl(`/assets/${item.relative_path.replace(/^\/+/, "")}`);
+  }
+  return "";
 }
 
 export function CmsMediaLibrary({
