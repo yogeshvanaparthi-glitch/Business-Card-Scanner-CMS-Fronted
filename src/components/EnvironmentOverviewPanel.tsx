@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   checkAdminEnvironment,
   fetchAdminTestUsers,
@@ -6,6 +6,8 @@ import {
   saveAdminChannelLocks,
   saveAdminReceiveEmail,
   saveAdminEmailDisplayName,
+  saveAdminDisplayName,
+  saveAdminDisplayPicture,
   saveAdminTestUsersLimit,
   setTenantUserScanEntitlement,
   DEFAULT_SCAN_CARD_LIMIT,
@@ -15,6 +17,9 @@ import {
   type ScanEntitlementMode,
   type TestUsersSummary,
 } from "@/lib/cmsApi";
+
+const DISPLAY_PICTURE_MAX_BYTES = 5 * 1024 * 1024;
+const DISPLAY_PICTURE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
 
 function formatWhen(value?: string | null): string {
   if (!value) return "—";
@@ -66,6 +71,13 @@ export function EnvironmentOverviewPanel({
   const [savingReceive, setSavingReceive] = useState(false);
   const [emailDisplayName, setEmailDisplayName] = useState(admin.email_display_name || "");
   const [savingDisplayName, setSavingDisplayName] = useState(false);
+  const [displayName, setDisplayName] = useState(admin.display_name || "");
+  const [savingBusinessDisplayName, setSavingBusinessDisplayName] = useState(false);
+  const [displayPictureUrl, setDisplayPictureUrl] = useState(admin.display_picture_url || "");
+  const [pictureFile, setPictureFile] = useState<File | null>(null);
+  const [picturePreview, setPicturePreview] = useState<string | null>(null);
+  const [savingPicture, setSavingPicture] = useState(false);
+  const pictureInputRef = useRef<HTMLInputElement>(null);
 
   const env = admin.environment;
   const locks = admin.channel_locks || {
@@ -80,13 +92,36 @@ export function EnvironmentOverviewPanel({
     setTestLimit(String(admin.test_users_limit ?? 0));
     setReceiveEmail(admin.receive_email || admin.emailEnv?.sender_notification_email || "");
     setEmailDisplayName(admin.email_display_name || "");
+    setDisplayName(admin.display_name || "");
+    setDisplayPictureUrl(admin.display_picture_url || "");
+    setPictureFile(null);
+    setPicturePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     setEnvResult(null);
     setLoadingUsers(true);
     void fetchAdminTestUsers(admin.admin_id)
       .then(setTestUsers)
       .catch(() => setTestUsers(null))
       .finally(() => setLoadingUsers(false));
-  }, [admin.admin_id, admin.test_users_limit, admin.settings_updated_at, admin.receive_email, admin.emailEnv?.sender_notification_email, admin.email_display_name]);
+  }, [
+    admin.admin_id,
+    admin.test_users_limit,
+    admin.settings_updated_at,
+    admin.receive_email,
+    admin.emailEnv?.sender_notification_email,
+    admin.email_display_name,
+    admin.display_name,
+    admin.company_name,
+    admin.display_picture_url,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (picturePreview) URL.revokeObjectURL(picturePreview);
+    };
+  }, [picturePreview]);
 
   const runEnvCheck = async () => {
     if (checking) return;
@@ -283,6 +318,78 @@ export function EnvironmentOverviewPanel({
     }
   };
 
+  const saveBusinessDisplayName = async () => {
+    if (savingBusinessDisplayName) return;
+    const value = displayName.trim();
+    if (value.length > 255) {
+      onError("Display Name must be 255 characters or fewer.");
+      return;
+    }
+    setSavingBusinessDisplayName(true);
+    try {
+      const { item } = await saveAdminDisplayName(admin.admin_id, value);
+      setDisplayName(item.display_name || value);
+      onRefreshAdmin(item);
+      onOk(
+        value
+          ? `Display Name saved for this Admin account: ${value}`
+          : "Display Name cleared for this Admin account.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Display Name");
+    } finally {
+      setSavingBusinessDisplayName(false);
+    }
+  };
+
+  const onPickPicture = (file: File | null) => {
+    setPicturePreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setPictureFile(null);
+    if (!file) return;
+    const type = (file.type || "").toLowerCase();
+    if (!DISPLAY_PICTURE_TYPES.has(type) && !/\.(jpe?g|png|webp)$/i.test(file.name)) {
+      onError("Invalid image format. Use JPEG, PNG, or WebP.");
+      return;
+    }
+    if (file.size > DISPLAY_PICTURE_MAX_BYTES) {
+      onError("Image must be 5 MB or smaller.");
+      return;
+    }
+    setPictureFile(file);
+    setPicturePreview(URL.createObjectURL(file));
+  };
+
+  const saveProfilePicture = async () => {
+    if (savingPicture) return;
+    if (!pictureFile) {
+      onError("Choose an image with Upload Picture before saving.");
+      return;
+    }
+    setSavingPicture(true);
+    try {
+      const { item } = await saveAdminDisplayPicture(
+        admin.admin_id,
+        pictureFile,
+      );
+      setDisplayPictureUrl(item.display_picture_url || "");
+      setPictureFile(null);
+      setPicturePreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      if (pictureInputRef.current) pictureInputRef.current.value = "";
+      onRefreshAdmin(item);
+      onOk("Profile picture saved for this Admin account only.");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save profile picture");
+    } finally {
+      setSavingPicture(false);
+    }
+  };
+
   const integ = envResult?.integrations;
   const lastHealthIntegrations =
     admin.last_health && typeof admin.last_health === "object"
@@ -327,7 +434,8 @@ export function EnvironmentOverviewPanel({
           <div>
             <h3 className="text-base font-semibold">Environment Overview</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">
-              Tenant: {admin.company_name || admin.email} · {admin.tenant_id}
+              Tenant: {admin.display_name || admin.company_name || admin.email} ·{" "}
+              {admin.tenant_id}
             </p>
           </div>
           <button
@@ -493,6 +601,100 @@ export function EnvironmentOverviewPanel({
               </button>
             </div>
           </label>
+        </div>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Display Name</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Profile display name for this Admin account only (stored on their user_id). Other
+              Admins and Users keep their own names.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder={
+                  `${admin.first_name || ""} ${admin.last_name || ""}`.trim() ||
+                  admin.company_name ||
+                  "John"
+                }
+                maxLength={255}
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingBusinessDisplayName}
+                onClick={() => void saveBusinessDisplayName()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingBusinessDisplayName ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <div className="text-sm">
+            <span className="font-semibold text-[var(--ink)]">Display Picture (Profile Picture)</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              Profile picture for this Admin account only (stored under
+              profile-pictures/&#123;user_id&#125;/). JPEG, PNG, or WebP · max 5 MB. Does not change other
+              accounts.
+            </span>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-start">
+              <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--line)] bg-slate-50">
+                {picturePreview || displayPictureUrl ? (
+                  <img
+                    src={picturePreview || displayPictureUrl}
+                    alt="Current profile"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="px-2 text-center text-xs text-[var(--muted)]">
+                    Current Profile Picture / Logo
+                  </span>
+                )}
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <input
+                  ref={pictureInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  className="hidden"
+                  onChange={(e) => onPickPicture(e.target.files?.[0] || null)}
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => pictureInputRef.current?.click()}
+                    className="rounded-md border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--ink)] shadow-sm hover:bg-slate-50"
+                  >
+                    Upload Picture
+                  </button>
+                  {picturePreview ? (
+                    <span className="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+                      Preview ready
+                    </span>
+                  ) : null}
+                </div>
+                {pictureFile ? (
+                  <p className="text-xs text-[var(--muted)]">
+                    Selected: {pictureFile.name} ({Math.ceil(pictureFile.size / 1024)} KB)
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={savingPicture || !pictureFile}
+                  onClick={() => void saveProfilePicture()}
+                  className="w-fit rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+                >
+                  {savingPicture ? "Saving…" : "Save Profile Picture"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">

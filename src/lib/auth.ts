@@ -126,7 +126,9 @@ export async function logout(): Promise<void> {
 
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
-  if (!headers.has("Content-Type") && init?.body) {
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (!headers.has("Content-Type") && init?.body && !isFormData) {
     headers.set("Content-Type", "application/json");
   }
 

@@ -326,6 +326,14 @@ export function CmsDashboard() {
                             next.email_display_name !== undefined
                               ? next.email_display_name
                               : a.email_display_name || "",
+                          display_name:
+                            next.display_name !== undefined
+                              ? next.display_name
+                              : a.display_name || "",
+                          display_picture_url:
+                            next.display_picture_url !== undefined
+                              ? next.display_picture_url
+                              : a.display_picture_url || "",
                           emailEnv: {
                             ...a.emailEnv,
                             ...next.emailEnv,

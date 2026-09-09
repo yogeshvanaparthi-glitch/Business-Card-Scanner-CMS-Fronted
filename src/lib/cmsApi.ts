@@ -117,6 +117,10 @@ export type AdminEnvRow = {
   receive_email: string;
   /** From header display name stored on the Admin's company. */
   email_display_name: string;
+  /** Business / WhatsApp Display Name (separate from Email Display Name). */
+  display_name: string;
+  /** Public URL for company Display Picture / profile logo. */
+  display_picture_url: string;
   payment?: PaymentSnapshot;
 };
 
@@ -644,6 +648,8 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
         "",
     ),
     email_display_name: String(raw.email_display_name ?? ""),
+    display_name: String(raw.display_name ?? ""),
+    display_picture_url: String(raw.display_picture_url ?? ""),
     payment: paymentRaw
       ? {
           payment_done: paymentDone,
@@ -781,6 +787,58 @@ export async function saveAdminEmailDisplayName(
     },
   );
   return normalizeAdminEnvItem(res.item);
+}
+
+export type WhatsAppIdentitySync = {
+  attempted?: boolean;
+  updated?: boolean;
+  about_updated?: boolean;
+  picture_updated?: boolean;
+  verified_name_note?: string;
+  error?: string | null;
+};
+
+export async function saveAdminDisplayName(
+  adminId: string,
+  displayName: string,
+): Promise<{ item: AdminEnvRow; whatsapp_sync?: WhatsAppIdentitySync }> {
+  const res = await apiJson<{
+    success: boolean;
+    item: Record<string, unknown>;
+    whatsapp_sync?: WhatsAppIdentitySync;
+  }>(`/api/cms/admin-env/${adminId}/display-name`, {
+    method: "PUT",
+    body: JSON.stringify({ display_name: displayName.trim() }),
+  });
+  return {
+    item: normalizeAdminEnvItem(res.item),
+    whatsapp_sync: res.whatsapp_sync,
+  };
+}
+
+export async function saveAdminDisplayPicture(
+  adminId: string,
+  file: File,
+): Promise<{ item: AdminEnvRow; whatsapp_sync?: WhatsAppIdentitySync }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await apiJson<{
+    success: boolean;
+    item: Record<string, unknown>;
+    display_picture_url?: string;
+    profile_image?: string;
+    whatsapp_sync?: WhatsAppIdentitySync;
+  }>(`/api/cms/admin-env/${adminId}/display-picture`, {
+    method: "PUT",
+    body: form,
+  });
+  const item = normalizeAdminEnvItem(res.item);
+  const picture =
+    String(res.profile_image || res.display_picture_url || item.display_picture_url || "");
+  return {
+    item: { ...item, display_picture_url: picture || item.display_picture_url },
+    whatsapp_sync: res.whatsapp_sync,
+  };
 }
 
 /** Deletes CMS env for this Admin; scanner falls back to global .env. */
