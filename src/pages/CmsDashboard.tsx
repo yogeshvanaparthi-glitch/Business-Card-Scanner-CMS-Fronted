@@ -1,6 +1,7 @@
+import { CmsMediaLibrary } from "@/components/CmsMediaLibrary";
 import { EnvironmentOverviewPanel } from "@/components/EnvironmentOverviewPanel";
 import { WhatsAppSetupPanel } from "@/components/WhatsAppSetupPanel";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
 import {
@@ -28,6 +29,7 @@ import {
   emptyWhatsAppHeaderMediaItem,
   syncWhatsAppHeaderMedia,
   type AdminEnvRow,
+  type CmsMediaItem,
   type GoogleSheetsEnv,
   type GoogleSheetsHealthResult,
   type TemplateEnv,
@@ -640,8 +642,11 @@ function AdminEnvEditor({
           />
         ) : section === "templates" ? (
           <TemplatesWorkspace
+            adminId={admin.admin_id}
             templates={templates}
             onChange={setTemplates}
+            onOk={onOk}
+            onError={onError}
           />
         ) : section === "whatsapp" ? (
           <div className="px-4 py-6 sm:px-6 lg:px-8">
@@ -777,14 +782,21 @@ function AdminEnvEditor({
 }
 
 function TemplatesWorkspace({
+  adminId,
   templates,
   onChange,
+  onOk,
+  onError,
 }: {
+  adminId: string;
   templates: TemplateEnv;
   onChange: (t: TemplateEnv) => void;
+  onOk: (text: string) => void;
+  onError: (text: string) => void;
 }) {
   const [shell, setShell] = useState("");
   const [previewMode, setPreviewMode] = useState<"email" | "whatsapp">("email");
+  const emailBodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     void fetchEmailShell()
@@ -825,6 +837,42 @@ function TemplatesWorkspace({
     onChange(syncWhatsAppHeaderMedia({ ...templates, whatsapp_header_media: next }));
   };
 
+  const insertEmailHtml = (html: string) => {
+    const el = emailBodyRef.current;
+    const body = templates.email_body || "";
+    if (!el) {
+      onChange({ ...templates, email_body: body ? `${body}\n${html}` : html });
+      onOk("Inserted image into email body");
+      return;
+    }
+    const start = el.selectionStart ?? body.length;
+    const end = el.selectionEnd ?? body.length;
+    const next = `${body.slice(0, start)}${html}${body.slice(end)}`;
+    onChange({ ...templates, email_body: next });
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + html.length;
+      el.setSelectionRange(pos, pos);
+    });
+    onOk("Inserted image into email body");
+  };
+
+  const useMediaForWhatsApp = (url: string, filename: string, kind: CmsMediaItem["kind"]) => {
+    const format: WhatsAppHeaderFormat =
+      kind === "video" ? "VIDEO" : kind === "document" ? "DOCUMENT" : "IMAGE";
+    const nextItems = [...mediaItems];
+    const targetIndex = nextItems.findIndex((m) => m.format === "NONE" || !m.media_url);
+    const index = targetIndex >= 0 ? targetIndex : 0;
+    nextItems[index] = {
+      ...nextItems[index],
+      format,
+      media_url: url,
+      media_filename: format === "DOCUMENT" ? filename : nextItems[index]?.media_filename || "",
+    };
+    onChange(syncWhatsAppHeaderMedia({ ...templates, whatsapp_header_media: nextItems }));
+    onOk(`Applied media to WhatsApp header (Media ${index + 1})`);
+  };
+
   const waPreview = [
     templates.whatsapp_header,
     applyTemplateVars(templates.whatsapp_body, templates),
@@ -850,6 +898,14 @@ function TemplatesWorkspace({
           token in email and WhatsApp.
         </p>
 
+        <CmsMediaLibrary
+          adminId={adminId}
+          onInsertEmailImg={insertEmailHtml}
+          onUseMediaUrl={useMediaForWhatsApp}
+          onOk={onOk}
+          onError={onError}
+        />
+
         <label className="block text-sm">
           <span className="mb-1.5 block font-medium">Email subject</span>
           <input
@@ -862,6 +918,7 @@ function TemplatesWorkspace({
         <label className="block text-sm">
           <span className="mb-1.5 block font-medium">Email body content (inside fixed shell)</span>
           <textarea
+            ref={emailBodyRef}
             rows={16}
             className="w-full resize-y rounded-md border border-[var(--line)] bg-white px-3 py-2.5 font-mono text-[12px] leading-relaxed shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
             value={templates.email_body}
@@ -958,6 +1015,10 @@ function TemplatesWorkspace({
                               ? "Video URL"
                               : "Brochure / PDF document URL"}
                         </span>
+                        <p className="mb-1.5 text-xs text-[var(--muted)]">
+                          Prefer <strong>Media library</strong> above (Upload → Use for WhatsApp), or
+                          paste a public URL Meta can download.
+                        </p>
                         <input
                           className="w-full rounded-md border border-[var(--line)] bg-white px-3 py-2.5 shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
                           value={item.media_url}

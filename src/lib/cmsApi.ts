@@ -841,6 +841,49 @@ export async function saveAdminDisplayPicture(
   };
 }
 
+export type CmsMediaItem = {
+  id: string;
+  filename: string;
+  original_name: string;
+  content_type: string;
+  kind: "image" | "video" | "document" | string;
+  size: number;
+  relative_path: string;
+  url: string;
+  created_at: string;
+};
+
+export async function fetchCmsMedia(adminId: string): Promise<CmsMediaItem[]> {
+  const res = await apiJson<{ success: boolean; items: CmsMediaItem[] }>(
+    `/api/cms/admin-env/${adminId}/media`,
+  );
+  return Array.isArray(res.items) ? res.items : [];
+}
+
+export async function uploadCmsMedia(adminId: string, file: File): Promise<CmsMediaItem> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await apiJson<{ success: boolean; item: CmsMediaItem }>(
+    `/api/cms/admin-env/${adminId}/media`,
+    { method: "POST", body: form },
+  );
+  return res.item;
+}
+
+export async function deleteCmsMedia(adminId: string, filename: string): Promise<CmsMediaItem> {
+  const res = await apiJson<{ success: boolean; item: CmsMediaItem }>(
+    `/api/cms/admin-env/${adminId}/media/${encodeURIComponent(filename)}`,
+    { method: "DELETE" },
+  );
+  return res.item;
+}
+
+/** Build an email-ready <img> tag for a media URL. */
+export function emailImgTag(url: string, alt = "Banner"): string {
+  const safeAlt = alt.replace(/"/g, "&quot;");
+  return `<img src="${url}" alt="${safeAlt}" width="560" style="max-width:100%;height:auto;display:block;border:0;" />`;
+}
+
 /** Deletes CMS env for this Admin; scanner falls back to global .env. */
 export async function removeAdminEnv(adminId: string): Promise<AdminEnvRow> {
   const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
