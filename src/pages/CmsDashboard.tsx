@@ -324,6 +324,10 @@ export function CmsDashboard() {
                             next.emailEnv?.sender_notification_email ||
                             a.receive_email ||
                             "",
+                          reply_to:
+                            next.reply_to !== undefined
+                              ? next.reply_to
+                              : next.emailEnv?.reply_to || a.reply_to || "",
                           email_display_name:
                             next.email_display_name !== undefined
                               ? next.email_display_name
@@ -344,6 +348,12 @@ export function CmsDashboard() {
                               next.receive_email ||
                               a.emailEnv?.sender_notification_email ||
                               "",
+                            reply_to:
+                              next.emailEnv?.reply_to !== undefined
+                                ? next.emailEnv.reply_to
+                                : next.reply_to !== undefined
+                                  ? next.reply_to
+                                  : a.emailEnv?.reply_to || "",
                           },
                         }
                       : a,
@@ -365,6 +375,8 @@ export function CmsDashboard() {
                             next.receive_email ||
                             next.emailEnv?.sender_notification_email ||
                             "",
+                          reply_to:
+                            next.reply_to || next.emailEnv?.reply_to || "",
                         }
                       : a,
                   ),

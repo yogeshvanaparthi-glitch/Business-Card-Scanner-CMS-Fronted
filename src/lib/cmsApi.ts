@@ -28,6 +28,8 @@ export type EmailEnv = {
   smtp_from: string;
   /** Optional: receives a copy of receiver/contact details after a successful send. */
   sender_notification_email: string;
+  /** Optional: Reply-To on outbound thank-you mail for this Admin/client. */
+  reply_to: string;
   enabled: boolean;
 };
 
@@ -116,6 +118,8 @@ export type AdminEnvRow = {
   channel_locks: ChannelLocks;
   /** Inbox that receives scanned-contact details copy for this Admin's company. */
   receive_email: string;
+  /** Reply-To address on outbound thank-you emails for this Admin's company. */
+  reply_to: string;
   /** From header display name stored on the Admin's company. */
   email_display_name: string;
   /** Business / WhatsApp Display Name (separate from Email Display Name). */
@@ -305,6 +309,7 @@ const EMPTY_EMAIL: EmailEnv = {
   smtp_password: "",
   smtp_from: "",
   sender_notification_email: "",
+  reply_to: "",
   enabled: false,
 };
 
@@ -459,6 +464,7 @@ function asEmail(raw: unknown): EmailEnv {
     sender_notification_email: String(
       o.sender_notification_email ?? o.SENDER_NOTIFICATION_EMAIL ?? "",
     ),
+    reply_to: String(o.reply_to ?? o.REPLY_TO ?? ""),
     enabled: Boolean(o.enabled),
   };
 }
@@ -683,6 +689,13 @@ export function normalizeAdminEnvItem(raw: Record<string, unknown>): AdminEnvRow
           : "") ||
         "",
     ),
+    reply_to: String(
+      raw.reply_to ||
+        (raw.email_settings && typeof raw.email_settings === "object"
+          ? String((raw.email_settings as Record<string, unknown>).reply_to || "")
+          : "") ||
+        "",
+    ),
     email_display_name: String(raw.email_display_name ?? ""),
     display_name: String(raw.display_name ?? ""),
     display_picture_url: String(raw.display_picture_url ?? ""),
@@ -804,6 +817,24 @@ export async function saveAdminReceiveEmail(
           sender_notification_email: receiveEmail.trim(),
           receive_email: receiveEmail.trim(),
           enabled: false,
+        },
+      }),
+    },
+  );
+  return normalizeAdminEnvItem(res.item);
+}
+
+export async function saveAdminReplyToEmail(
+  adminId: string,
+  replyTo: string,
+): Promise<AdminEnvRow> {
+  const res = await apiJson<{ success: boolean; item: Record<string, unknown> }>(
+    `/api/cms/admin-env/${adminId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        email: {
+          reply_to: replyTo.trim(),
         },
       }),
     },

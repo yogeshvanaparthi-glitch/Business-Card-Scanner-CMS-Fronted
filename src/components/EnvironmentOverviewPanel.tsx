@@ -5,6 +5,7 @@ import {
   formatEnvironmentCheckMessage,
   saveAdminChannelLocks,
   saveAdminReceiveEmail,
+  saveAdminReplyToEmail,
   saveAdminEmailDisplayName,
   saveAdminDisplayName,
   saveAdminDisplayPicture,
@@ -69,6 +70,8 @@ export function EnvironmentOverviewPanel({
   const [savingLock, setSavingLock] = useState<keyof ChannelLocks | null>(null);
   const [receiveEmail, setReceiveEmail] = useState(admin.receive_email || "");
   const [savingReceive, setSavingReceive] = useState(false);
+  const [replyToEmail, setReplyToEmail] = useState(admin.reply_to || "");
+  const [savingReplyTo, setSavingReplyTo] = useState(false);
   const [emailDisplayName, setEmailDisplayName] = useState(admin.email_display_name || "");
   const [savingDisplayName, setSavingDisplayName] = useState(false);
   const [displayName, setDisplayName] = useState(admin.display_name || "");
@@ -91,6 +94,7 @@ export function EnvironmentOverviewPanel({
   useEffect(() => {
     setTestLimit(String(admin.test_users_limit ?? 0));
     setReceiveEmail(admin.receive_email || admin.emailEnv?.sender_notification_email || "");
+    setReplyToEmail(admin.reply_to || admin.emailEnv?.reply_to || "");
     setEmailDisplayName(admin.email_display_name || "");
     setDisplayName(admin.display_name || "");
     setDisplayPictureUrl(admin.display_picture_url || "");
@@ -111,6 +115,8 @@ export function EnvironmentOverviewPanel({
     admin.settings_updated_at,
     admin.receive_email,
     admin.emailEnv?.sender_notification_email,
+    admin.reply_to,
+    admin.emailEnv?.reply_to,
     admin.email_display_name,
     admin.display_name,
     admin.company_name,
@@ -291,6 +297,30 @@ export function EnvironmentOverviewPanel({
       onError(err instanceof Error ? err.message : "Failed to save Receive email");
     } finally {
       setSavingReceive(false);
+    }
+  };
+
+  const saveReplyToEmail = async () => {
+    if (savingReplyTo) return;
+    const value = replyToEmail.trim();
+    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      onError("Enter a valid Reply-To email address.");
+      return;
+    }
+    setSavingReplyTo(true);
+    try {
+      const next = await saveAdminReplyToEmail(admin.admin_id, value);
+      setReplyToEmail(next.reply_to || value);
+      onRefreshAdmin(next);
+      onOk(
+        value
+          ? `Reply-To saved: ${value}`
+          : "Reply-To cleared — server BUSINESS_EMAIL will be used.",
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Failed to save Reply-To");
+    } finally {
+      setSavingReplyTo(false);
     }
   };
 
@@ -570,6 +600,34 @@ export function EnvironmentOverviewPanel({
                 className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
               >
                 {savingReceive ? "Saving…" : "Save receive email"}
+              </button>
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-4 rounded-md border border-[var(--line)] bg-white px-3 py-3">
+          <label className="block text-sm">
+            <span className="font-semibold text-[var(--ink)]">Reply-To</span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              When a contact replies to the thank-you email, their reply goes here. From stays
+              on the verified SES address (e.g. onboarding@namecardscan.com). Leave blank to use
+              the server BUSINESS_EMAIL default.
+            </span>
+            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="email"
+                value={replyToEmail}
+                onChange={(e) => setReplyToEmail(e.target.value)}
+                placeholder="client@company.com"
+                className="w-full flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm shadow-sm focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+              />
+              <button
+                type="button"
+                disabled={savingReplyTo}
+                onClick={() => void saveReplyToEmail()}
+                className="shrink-0 rounded-md border border-[var(--brand)] bg-white px-4 py-2.5 text-sm font-semibold text-[var(--brand-ink)] shadow-sm hover:bg-[var(--brand-soft)]/40 disabled:opacity-50"
+              >
+                {savingReplyTo ? "Saving…" : "Save Reply-To"}
               </button>
             </div>
           </label>
