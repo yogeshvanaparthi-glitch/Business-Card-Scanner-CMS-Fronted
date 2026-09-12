@@ -1,16 +1,12 @@
-import { useRef, useState, type FormEvent } from "react";
-import ReCAPTCHA from "react-google-recaptcha";
+import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
-import { RECAPTCHA_SITE_KEY } from "@/lib/recaptcha";
 
 export function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
-  const captchaRef = useRef<ReCAPTCHA | null>(null);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [captchaToken, setCaptchaToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -30,19 +26,12 @@ export function LoginPage() {
     e.preventDefault();
     setError("");
 
-    if (!captchaToken) {
-      setError("Please complete the CAPTCHA verification.");
-      return;
-    }
-
     setSubmitting(true);
     try {
-      await login(identifier.trim(), password, captchaToken);
+      await login(identifier.trim(), password);
       navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
-      captchaRef.current?.reset();
-      setCaptchaToken("");
     } finally {
       setSubmitting(false);
     }
@@ -83,21 +72,6 @@ export function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
               required
-            />
-          </div>
-
-          <div className="overflow-x-auto">
-            <ReCAPTCHA
-              ref={captchaRef}
-              sitekey={RECAPTCHA_SITE_KEY}
-              onChange={(token) => setCaptchaToken(token || "")}
-              onExpired={() => setCaptchaToken("")}
-              onError={() => {
-                setCaptchaToken("");
-                setError(
-                  "CAPTCHA invalid for this domain. In Google reCAPTCHA admin, add this CMS hostname to the allowed domains for the site key, then refresh.",
-                );
-              }}
             />
           </div>
 

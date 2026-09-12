@@ -27,7 +27,6 @@ type AuthContextValue = {
   login: (
     identifier: string,
     password: string,
-    recaptchaToken: string,
   ) => Promise<LoginResponse>;
   logout: () => Promise<void>;
 };
@@ -93,8 +92,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (identifier: string, password: string, recaptchaToken: string) => {
-      const data = await apiLogin(identifier, password, recaptchaToken);
+    async (identifier: string, password: string) => {
+      const data = await apiLogin(identifier, password);
       if (data.user.role !== "SUPER_ADMIN") {
         clearSession();
         throw new Error("Only Super Admin can access the CMS application.");
