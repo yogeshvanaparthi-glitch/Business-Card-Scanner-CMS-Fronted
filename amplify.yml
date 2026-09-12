@@ -9,13 +9,19 @@ frontend:
     build:
       commands:
         # VITE_API_URL must come from Amplify Console → Hosting → Environment variables.
-        # Never hardcode the API origin here or in app source.
+        # reCAPTCHA site key: use Amplify env if set, otherwise the shared public v2 key.
         - |
           if [ -z "$VITE_API_URL" ]; then
             echo "ERROR: VITE_API_URL is not set."
             echo "Add it in Amplify Console → App settings → Environment variables"
             echo "Example: VITE_API_URL=https://api.namecardscan.com"
             exit 1
+          fi
+          if [ -z "$VITE_RECAPTCHA_SITE_KEY" ]; then
+            export VITE_RECAPTCHA_SITE_KEY="6LfmtrUtAAAAAAXaPQdzLMILPzy7kjVcKBAbDniA"
+            echo "VITE_RECAPTCHA_SITE_KEY not set in Amplify; using shared NameCardScan site key"
+          else
+            echo "Building CMS with VITE_RECAPTCHA_SITE_KEY from Amplify environment"
           fi
           echo "Building CMS with VITE_API_URL from Amplify environment"
           npm run build

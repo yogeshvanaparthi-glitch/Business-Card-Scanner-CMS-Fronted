@@ -95,7 +95,7 @@ export function LoginPage() {
               onError={() => {
                 setCaptchaToken("");
                 setError(
-                  "CAPTCHA failed to load. If this is a new CMS domain, add it in Google reCAPTCHA admin, then refresh.",
+                  "CAPTCHA invalid for this domain. In Google reCAPTCHA admin, add this CMS hostname to the allowed domains for the site key, then refresh.",
                 );
               }}
             />

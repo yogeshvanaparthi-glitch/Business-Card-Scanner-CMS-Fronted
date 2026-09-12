@@ -1,9 +1,8 @@
 /**
  * Google reCAPTCHA v2 site key (public client key).
- * Prefer Amplify/env override; fall back to the same key as the main NameCardScan app
- * so production CMS builds work without an extra Amplify variable.
+ * Set VITE_RECAPTCHA_SITE_KEY in Amplify / .env, or fall back to the shared
+ * NameCardScan production site key.
  */
 const ENV_KEY = (import.meta.env.VITE_RECAPTCHA_SITE_KEY || "").trim();
-const PROD_PUBLIC_SITE_KEY = "6LfmtrUtAAAAAAXaPQdzLMILPzy7kjVcKBAbDniA";
-
-export const RECAPTCHA_SITE_KEY = ENV_KEY || PROD_PUBLIC_SITE_KEY;
+export const RECAPTCHA_SITE_KEY =
+  ENV_KEY || "6LfmtrUtAAAAAAXaPQdzLMILPzy7kjVcKBAbDniA";
