@@ -83,11 +83,19 @@ function formatLoginError(detail: unknown, status: number): string {
   return `Login failed (${status})`;
 }
 
-export async function login(identifier: string, password: string): Promise<LoginResponse> {
+export async function login(
+  identifier: string,
+  password: string,
+  recaptchaToken: string,
+): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifier, password }),
+    body: JSON.stringify({
+      identifier,
+      password,
+      recaptcha_token: recaptchaToken,
+    }),
   });
 
   if (!res.ok) {
