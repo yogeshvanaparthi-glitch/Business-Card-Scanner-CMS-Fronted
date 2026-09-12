@@ -1,12 +1,17 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
+import ReCAPTCHA from "react-google-recaptcha";
 import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/auth/AuthContext";
+
+const RECAPTCHA_SITE_KEY = (import.meta.env.VITE_RECAPTCHA_SITE_KEY || "").trim();
 
 export function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
+  const captchaRef = useRef<ReCAPTCHA | null>(null);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -25,12 +30,20 @@ export function LoginPage() {
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (RECAPTCHA_SITE_KEY && !captchaToken) {
+      setError("Please complete the CAPTCHA verification.");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await login(identifier.trim(), password);
+      await login(identifier.trim(), password, captchaToken);
       navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
+      captchaRef.current?.reset();
+      setCaptchaToken("");
     } finally {
       setSubmitting(false);
     }
@@ -73,6 +86,26 @@ export function LoginPage() {
               required
             />
           </div>
+
+          {RECAPTCHA_SITE_KEY ? (
+            <div className="overflow-x-auto">
+              <ReCAPTCHA
+                ref={captchaRef}
+                sitekey={RECAPTCHA_SITE_KEY}
+                onChange={(token) => setCaptchaToken(token || "")}
+                onExpired={() => setCaptchaToken("")}
+                onError={() => {
+                  setCaptchaToken("");
+                  setError("CAPTCHA failed to load. Refresh and try again.");
+                }}
+              />
+            </div>
+          ) : (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Missing <code>VITE_RECAPTCHA_SITE_KEY</code>. Production login requires Google
+              reCAPTCHA v2.
+            </p>
+          )}
 
           {error ? (
             <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--danger)]">

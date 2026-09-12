@@ -56,20 +56,53 @@ export function clearSession() {
   }
 }
 
-export async function login(identifier: string, password: string): Promise<LoginResponse> {
+function formatLoginError(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.trim()) return msg;
+  }
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return "";
+        const row = item as { loc?: unknown[]; msg?: unknown };
+        const field = Array.isArray(row.loc)
+          ? row.loc
+              .filter((p) => p !== "body")
+              .map(String)
+              .join(".")
+          : "";
+        const msg = typeof row.msg === "string" ? row.msg : "";
+        if (field && msg) return `${field}: ${msg}`;
+        return msg;
+      })
+      .filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  return `Login failed (${status})`;
+}
+
+export async function login(
+  identifier: string,
+  password: string,
+  recaptchaToken = "",
+): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identifier, password }),
+    body: JSON.stringify({
+      identifier,
+      password,
+      recaptcha_token: recaptchaToken,
+    }),
   });
 
   if (!res.ok) {
     let message = `Login failed (${res.status})`;
     try {
       const body = await res.json();
-      const detail = body.detail ?? body.message;
-      if (typeof detail === "string") message = detail;
-      else if (detail?.message) message = detail.message;
+      message = formatLoginError(body.detail ?? body.message, res.status);
     } catch {
       /* ignore */
     }

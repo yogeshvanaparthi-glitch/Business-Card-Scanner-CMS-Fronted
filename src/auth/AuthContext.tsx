@@ -24,7 +24,11 @@ type AuthContextValue = {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (identifier: string, password: string) => Promise<LoginResponse>;
+  login: (
+    identifier: string,
+    password: string,
+    recaptchaToken?: string,
+  ) => Promise<LoginResponse>;
   logout: () => Promise<void>;
 };
 
@@ -88,17 +92,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("ncs-cms-auth-cleared", onCleared);
   }, []);
 
-  const login = useCallback(async (identifier: string, password: string) => {
-    const data = await apiLogin(identifier, password);
-    if (data.user.role !== "SUPER_ADMIN") {
-      clearSession();
-      throw new Error("Only Super Admin can access the CMS application.");
-    }
-    persistSession(data.access_token, data.refresh_token, data.user);
-    setUser(data.user);
-    setTokenVersion((v) => v + 1);
-    return data;
-  }, []);
+  const login = useCallback(
+    async (identifier: string, password: string, recaptchaToken = "") => {
+      const data = await apiLogin(identifier, password, recaptchaToken);
+      if (data.user.role !== "SUPER_ADMIN") {
+        clearSession();
+        throw new Error("Only Super Admin can access the CMS application.");
+      }
+      persistSession(data.access_token, data.refresh_token, data.user);
+      setUser(data.user);
+      setTokenVersion((v) => v + 1);
+      return data;
+    },
+    [],
+  );
 
   const logout = useCallback(async () => {
     await apiLogout();
