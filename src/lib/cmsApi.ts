@@ -571,8 +571,13 @@ export function previewValueForToken(t: TemplateEnv, tokenNum: string): string {
 }
 
 /** Apply CMS / thank-you tokens for live preview using token_map. */
-export function applyTemplateVars(text: string, t: TemplateEnv): string {
+export function applyTemplateVars(text: string, t: TemplateEnv, admin?: AdminEnvRow): string {
   const year = String(new Date().getFullYear());
+  const resolvedDisplayName =
+    (admin?.display_name || "").trim() ||
+    (admin ? displayName(admin) : "") ||
+    (t.preview_signoff || "").trim() ||
+    "Dhana";
   let out = text || "";
   const nums = Object.keys(t.token_map)
     .map(Number)
@@ -582,22 +587,28 @@ export function applyTemplateVars(text: string, t: TemplateEnv): string {
     const key = String(n);
     out = out.replaceAll(`{{${key}}}`, previewValueForToken(t, key));
   }
-  // Legacy named tokens
+  // Named tokens
   out = out
     .replaceAll("{{name}}", previewValueForToken(t, "1") || t.preview_name || "Alex")
     .replaceAll("{{company}}", t.preview_company || "Company")
     .replaceAll("{{phone}}", t.preview_phone || "")
     .replaceAll("{{email}}", t.preview_email || "")
     .replaceAll("{{GREETING}}", previewValueForToken(t, "1") || t.preview_name || "Alex")
+    .replaceAll("{{DISPLAY_NAME}}", resolvedDisplayName)
     .replaceAll("{{EVENT_NAME}}", t.preview_company || "the event")
     .replaceAll("{{YEAR}}", year)
     .replaceAll("{{PDF_DOWNLOAD_HREF}}", "#");
   return out;
 }
 
-export function buildEmailPreviewHtml(shell: string, body: string, t: TemplateEnv): string {
-  const filledBody = applyTemplateVars(body, t);
-  const filledShell = applyTemplateVars(shell, t).replaceAll("{{BODY_HTML}}", filledBody);
+export function buildEmailPreviewHtml(
+  shell: string,
+  body: string,
+  t: TemplateEnv,
+  admin?: AdminEnvRow,
+): string {
+  const filledBody = applyTemplateVars(body, t, admin);
+  const filledShell = applyTemplateVars(shell, t, admin).replaceAll("{{BODY_HTML}}", filledBody);
   // Dev: Vite proxies /assets → local API.
   // Production CMS (Amplify) has no /assets proxy — keep/resolve absolute API URLs.
   if (import.meta.env.DEV) {

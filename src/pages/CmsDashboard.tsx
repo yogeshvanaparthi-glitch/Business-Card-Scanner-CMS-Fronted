@@ -655,6 +655,7 @@ function AdminEnvEditor({
         ) : section === "templates" ? (
           <TemplatesWorkspace
             adminId={admin.admin_id}
+            admin={admin}
             templates={templates}
             onChange={setTemplates}
             onOk={onOk}
@@ -795,12 +796,14 @@ function AdminEnvEditor({
 
 function TemplatesWorkspace({
   adminId,
+  admin,
   templates,
   onChange,
   onOk,
   onError,
 }: {
   adminId: string;
+  admin?: AdminEnvRow;
   templates: TemplateEnv;
   onChange: (t: TemplateEnv) => void;
   onOk: (text: string) => void;
@@ -887,15 +890,15 @@ function TemplatesWorkspace({
 
   const waPreview = [
     templates.whatsapp_header,
-    applyTemplateVars(templates.whatsapp_body, templates),
+    applyTemplateVars(templates.whatsapp_body, templates, admin),
     templates.whatsapp_footer,
   ]
-    .map((part) => applyTemplateVars(part || "", templates).trim())
+    .map((part) => applyTemplateVars(part || "", templates, admin).trim())
     .filter(Boolean)
     .join("\n\n");
   const emailHtml = shell
-    ? buildEmailPreviewHtml(shell, templates.email_body, templates)
-    : applyTemplateVars(templates.email_body, templates);
+    ? buildEmailPreviewHtml(shell, templates.email_body, templates, admin)
+    : applyTemplateVars(templates.email_body, templates, admin);
 
   return (
     <div className="grid w-full grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
